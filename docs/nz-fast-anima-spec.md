@@ -208,6 +208,124 @@ nzfa_mode
 - `Diagnose only`: 基本情報、timing、attention、cond/uncond、low-bit / compile 関連情報を一括出力する。
 - `Identity patch test`: `backend.nn.anima.Block.forward` を Nz-fast-anima の wrapper 経由に切り替え、元の Forge Neo 実装をそのまま呼び戻す。画像内容を変えず、推論パイプラインの一部を拡張側で捕捉できるかを実機検証する。
 
+### 7.2.1 高速化実験 UI 方針
+
+高速化実験は、mode dropdown だけで多数の専用 mode を増やすのではなく、AlwaysVisible panel 内にカテゴリ別の操作群として配置する。
+
+基本原則:
+
+- UI は top-level の `Nz-fast-anima` Accordion を1つだけ持つ。その配下に `Attention` / `2D Sparse` / `Cond / Uncond` / `Low-bit / Compile` / `Diagnostics` のサブ Accordion を置く。
+- 他拡張と同じ階層に Nz-fast-anima 用の top-level Accordion を複数作らない。
+- すべての項目の初期状態は Forge Neo 本体の挙動と一致させる。
+- Forge Neo 本体に既に存在する選択肢は、Nz-fast-anima 側でも本体の現在値を初期値として表示する。
+- Forge Neo 本体に存在しない実験機能は、必ず `Enable ...` checkbox を持つ。
+- 実験機能の `Enable` は初期値 `False` とする。
+- すべての experimental checkbox が `False` で、既存機能の値が Forge current/default のままなら、推論結果と推論経路は Forge Neo baseline と同等でなければならない。
+- UI の選択値は生成開始時に snapshot し、生成中に UI を変更しても進行中の batch へは反映しない。
+- 画像生成に影響する実験が有効な場合は、生成ログへ設定 snapshot を出す。
+
+#### Attention kernel controls
+
+目的:
+
+- Forge Neo が Anima で使っている attention backend を確認し、既存 backend 間の差し替えによる速度差を比較する。
+
+UI:
+
+| Control | UI type | Default | Notes |
+| --- | --- | --- | --- |
+| `Attention backend` | radio / dropdown | Forge current backend | StabilityMatrix版 Forge Neo 実測では `attention_sage`。起動ログでも `Using SageAttention 2` が確認されている。 |
+| `Attention target` | radio | `self + cross` | Forge baseline と一致。実験時のみ `self only` / `cross only` を選べる。 |
+| `Attention block range` | range slider | `0..27` | Forge baseline は全 block 同一 backend。range を絞る場合は実験扱い。 |
+
+候補値:
+
+- `attention_sage`
+- `attention_flash`
+- `attention_xformers`
+- `attention_pytorch`
+- `Forge current/default`
+
+`Forge current/default` は実行環境で検出された本体設定をそのまま使う値である。対象環境では現時点で `attention_sage` と解釈する。
+
+#### 2D sparse attention / NATTEN controls
+
+目的:
+
+- `backend.nn.anima.Block.forward` で見えている `T/H/W` 情報を使い、self-attention を局所 attention に置換して高速化を狙う。
+
+UI:
+
+| Control | UI type | Default | Notes |
+| --- | --- | --- | --- |
+| `Enable 2D sparse attention` | checkbox | `False` | Forge Neo 本体に存在しない Nz-fast-anima 実験機能。 |
+| `Sparse backend` | radio | `NATTEN (optional)` | `NATTEN` が利用可能なら既定で使う。利用不可の場合は選択不可または degraded 表示にし、`Torch prototype` を検証用 fallback として選べるようにする。 |
+| `Sparse target` | radio | `self attention only` | cross-attention は text/context sequence を使うため初期実験では変更しない。 |
+| `Block start` | slider | `14` | 28 blocks の後半から適用する初期 preset。ユーザーが `0..27` の範囲で調整できる。Enable off では無効。 |
+| `Block end` | slider | `27` | 初期実験 preset。ユーザーが `0..27` の範囲で調整できる。Enable off では無効。 |
+| `Step start` | slider | `0` | 初期値は全 step 対象。 |
+| `Step end` | slider | `last step` | 生成 steps に合わせて解釈する。 |
+| `Local attention window` | slider | `15` | 各 latent token が参照する局所近傍の幅。奇数値を基本とする。画像品質と速度の主要 tradeoff。 |
+| `Dilation` | slider | `1` | 初期値は通常近傍。 |
+| `Full attention interval` | slider / number | `0` | `0` は full attention 挿入なし。 |
+
+注意:
+
+- `Enable 2D sparse attention=False` が Forge baseline。
+- `Block start=14` / `Block end=27` は固定仕様ではなく初期値である。後半 block 限定は、全 block 適用より破綻リスクを抑えた初期 preset として採用する。
+- `Local attention window` は full attention の代わりに各 token が見る近傍範囲である。値が大きいほど full attention に近く安全寄り、小さいほど高速化余地が増えるが破綻リスクも上がる。
+- `Sparse backend=NATTEN` は optional dependency とする。NATTEN が import できない場合でも拡張全体は動作し、NATTEN backend だけ degraded / unavailable にする。
+- `Torch prototype` は高速化本命ではなく、NATTEN 由来の問題か sparse algorithm 自体の問題かを切り分けるための検証 backend とする。
+- 最初の algorithmic patch は self-attention のみを対象にする。
+- `Block.forward` は `x_B_T_H_W_D` を受け取るため、H/W/T を保持できる最も実用的な patch point である。
+
+#### Cond/uncond optimization controls
+
+目的:
+
+- Forge Neo 既存の CFG batching を崩さず、未検証条件で追加の高速化余地があるか調べる。
+
+UI:
+
+| Control | UI type | Default | Notes |
+| --- | --- | --- | --- |
+| `Enable cond/uncond optimization` | checkbox | `False` | 通常 CFG>1 は既に同一 model call に batch されているため、低優先度の実験機能。 |
+| `Cond/uncond mode` | radio | `Forge default` | baseline は Forge Neo の `calc_cond_uncond_batch()` に従う。 |
+| `Skip uncond when CFG=1` | checkbox | `False` | Forge 側挙動を確認してから有効化する。 |
+| `Guidance step schedule` | checkbox | `False` | 一部 step だけ CFG 処理を変える実験。 |
+| `Guidance interval` | slider / number | `1` | schedule 有効時のみ使用。 |
+
+既知事実:
+
+- 2026-05-26 の実測では CFG>1 の通常生成で `cond_or_uncond=[1, 0]`、`input_shape=2x16x1x192x192` が得られ、cond/uncond は同一 model call に batch されていた。
+- このため cond/uncond 最適化は高速化の本命ではないが、検証項目からは外さない。
+
+#### Low-bit / compile controls
+
+目的:
+
+- Forge Neo の dtype / ops / compile 関連機能を Anima に適用した場合の速度、VRAM、画質を比較する。
+
+UI:
+
+| Control | UI type | Default | Notes |
+| --- | --- | --- | --- |
+| `Precision / ops mode` | dropdown | Forge current ops | 実測では `ForgeOperations`、storage/computation とも `torch.bfloat16`。 |
+| `Enable Nz low-bit experiment` | checkbox | `False` | Forge current から追加で低bit化する場合のみ有効。 |
+| `Low-bit target` | checkbox group | none | 候補: attention / MLP / all linear / selected blocks。 |
+| `Low-bit format` | radio | 未確定 | 候補: fp8 / int8 / nf4。実装可否確認が必要。 |
+| `Enable torch.compile experiment` | checkbox | `False` | Forge current で compile 未使用なら off が baseline。 |
+| `Compile target` | radio | `none` | 候補: block / self-attention / MLP / full diffusion model。 |
+| `Compile mode` | dropdown | Forge/PyTorch default | 候補: default / reduce-overhead / max-autotune。 |
+| `Warmup runs` | slider / number | `1` | compile 初回コストと2回目以降を分けて測る。 |
+
+注意:
+
+- model reload が必要な設定と runtime patch で足りる設定を UI 上で区別する。
+- reload 必須項目を変更した場合、生成直前に silent reload しない。UI またはログで「設定変更時にはモデルをリロードしてください」と明示する。
+- 初期実装では自動 model reload 機能を実装しない。
+- compile は初回生成を遅くする可能性があるため、benchmark では warmup と measured run を分ける。
+
 高速化実験の優先順位:
 
 1. `Experimental 2D sparse attention`
@@ -462,6 +580,17 @@ avg_step_time = sum(step_durations) / len(step_durations)
 
 初期診断版ではファイル出力を必須にしない。
 
+高速化実験版でも、初期実装では JSON / CSV benchmark log を保存しない。実験結果はコンソール summary を主な確認手段にする。
+
+重要な summary:
+
+- `total_sampling_time`
+- `avg_step_time`
+- `denoiser_calls`
+- 実験機能が有効な場合の設定 snapshot
+
+画質比較は初期実装では目視確認とする。baseline / patched pair の自動保存は行わない。
+
 将来ログ、cache、比較結果、profiling 結果をファイル保存する場合:
 
 - `logs/`, `cache/`, `tmp/` のように用途別 directory を分ける。
@@ -481,6 +610,11 @@ avg_step_time = sum(step_durations) / len(step_durations)
 - patch 適用対象と挙動: `target=backend.nn.anima.Block.forward behavior=call_original`
 - 各 call の一部: `identity_patch_call=... route=Nz-fast-anima->original_Block.forward`
 - 生成後 summary: `identity_patch_summary=calls=... shape_mismatches=... errors=... active=True`
+
+2026-05-26 の StabilityMatrix版 Forge Neo 実機検証では、32 steps / 28 blocks の生成で
+`identity_patch_summary=calls=896 num_blocks=28 shape_mismatches=0 errors=0` が得られた。
+これは `32 * 28 = 896` と一致し、Anima block-level の推論経路を Nz-fast-anima wrapper
+経由に切り替えられることを確認した結果である。
 
 将来 patch を行う場合、すべての patch は `patcher.py` で管理する。
 
@@ -554,6 +688,15 @@ Diagnose only:
 [Nz-fast-anima] denoiser_calls=30 avg_step_time=1.234s total_sampling_time=37.020s
 ```
 
+Identity patch test:
+
+```text
+[Nz-fast-anima] applied identity patch kind=block_forward_identity target=backend.nn.anima.Block.forward behavior=call_original
+[Nz-fast-anima] version=0.1.1 enabled=True mode=Identity patch test status=identity-patch
+[Nz-fast-anima] identity_patch_call=call=0 block_index=0 input_shape=2x1x96x96x2048 output_shape=2x1x96x96x2048 same_shape=True route=Nz-fast-anima->original_Block.forward
+[Nz-fast-anima] identity_patch_summary=calls=896 num_blocks=28 logged_calls=17 shape_mismatches=0 errors=0 active=True target=backend.nn.anima.Block.forward behavior=call_original
+```
+
 Trace attention:
 
 ```text
@@ -605,6 +748,8 @@ README に明記する項目:
 - supported model で model detection evidence を出力できる。
 - `Diagnose only` で total sampling time と average step time を出力できる。
 - `Diagnose only` で attention backend、uncond presence、CFG 関連情報、dtype / Forge ops 関連情報を一括出力できる。
+- `Identity patch test` で `backend.nn.anima.Block.forward` を wrapper 経由に切り替え、元の `Block.forward` を呼び戻せる。
+- `Identity patch test` の summary で `steps * num_blocks` と一致する call count、`shape_mismatches=0`、`errors=0` を確認できる。
 - `Off` ではログ出力と処理変更が止まる。
 - 例外時に WebUI 起動と画像生成を可能な限り止めず、status を `error` または degraded 状態へ移せる。
 
@@ -613,6 +758,9 @@ README に明記する項目:
 - patch 対象が明示されている。
 - patch 適用前後で復元できる。
 - baseline と同一条件で比較できる。
+- すべての実験項目を off にした場合、Forge Neo baseline と同等の挙動になる。
+- Forge Neo 本体にない機能は `Enable ...` checkbox が off の状態を default とする。
+- Forge Neo 本体にある機能は、本体の current/default 値を UI 初期値として表示する。
 - 画像が生成される。
 - 品質劣化が視覚的に許容範囲内である。
 - 1step 平均時間が 5% 以上短縮する。
@@ -622,6 +770,20 @@ README に明記する項目:
 - Forge Neo の `torch.compile` 実装箇所を特定する。
 - `on_cfg_denoiser()` の呼び出し回数が target sampler ごとに UI steps と一致するか確認する。
 - Anima / Cosmos-Predict2 派生 checkpoint の検出条件を実機で確認する。
-- 2D sparse attention 実験で H/W/T 情報を安全に渡す patch point を決める。
-- low-bit 実験を runtime patch で行うか、model reload 前提で行うかを決める。
-- status UI を AlwaysVisible panel だけで十分にするか、FastAPI endpoint と JS を追加するかを決める。
+- 2D sparse attention 実験で `Block.forward` から self-attention 実装へ H/W/T 情報を渡す方法を決める。
+- low-bit / compile 設定ごとに、runtime patch で足りるか model reload が必要かを判定して UI に表示する。
+- NATTEN が対象環境で import / 実行できるか確認する。
+
+## 18. 確定した仕様判断
+
+2026-05-26 時点で確定した実験 UI 方針:
+
+- 2D sparse attention の初期 preset は後半 block 限定とする。`Block start=14`、`Block end=27` を default にし、ユーザーは slider で `0..27` の範囲を自由に変更できる。
+- `Window size` という名称は使わず、UI 表示名は `Local attention window` とする。
+- `Local attention window` は slider で指定する。初期値は `15` とする。値は基本的に奇数のみを扱う。
+- `Sparse backend` の default は `NATTEN (optional)` とする。NATTEN が利用できない場合は degraded / unavailable とし、`Torch prototype` を検証用 fallback として選べるようにする。
+- `Torch prototype` は高速化本命ではなく、NATTEN なしでも破綻するかを切り分けるための backend とする。
+- 実験結果はコンソール summary のみで確認する。JSON / CSV 保存は初期実装では行わない。
+- 画質比較は目視確認のみとする。baseline / patched pair の自動保存は初期実装では行わない。
+- UI は top-level の `Nz-fast-anima` Accordion 1つの配下にカテゴリ別サブ Accordion を置く。他拡張と同じ階層に Nz-fast-anima 用 Accordion を複数作らない。
+- low-bit / compile で model reload が必要な設定がある場合、自動 reload は行わない。UI またはログで「設定変更時にはモデルをリロードしてください」と知らせる。

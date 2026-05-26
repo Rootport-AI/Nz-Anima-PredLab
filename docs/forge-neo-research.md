@@ -374,6 +374,82 @@ Timing caveat:
 - A first algorithmic experiment can start with later blocks, for example `14..27`,
   but the safe block range cannot be proven from logs alone.
 
+## Runtime identity patch verification
+
+An `Identity patch test` was run on StabilityMatrix版 Forge Neo on 2026-05-26 to
+verify that Nz-fast-anima can intercept part of the real Anima inference pipeline,
+not merely print logs around it.
+
+Patch target:
+
+- `backend.nn.anima.Block.forward`
+
+Patch behavior:
+
+- Save the original `Block.forward`.
+- Replace `Block.forward` with a Nz-fast-anima wrapper.
+- In the wrapper, call the saved original function with the same arguments.
+- Return the original output unchanged.
+- Log only from inside the wrapper after the original function returns.
+
+Observed verification logs:
+
+```text
+[Nz-fast-anima] applied identity patch kind=block_forward_identity target=backend.nn.anima.Block.forward behavior=call_original
+[Nz-fast-anima] identity_patch_call=call=0 block_index=0 input_shape=2x1x96x96x2048 output_shape=2x1x96x96x2048 same_shape=True input_dtype=torch.bfloat16 output_dtype=torch.bfloat16 device=cuda:0 route=Nz-fast-anima->original_Block.forward
+[Nz-fast-anima] identity_patch_summary=calls=896 num_blocks=28 logged_calls=17 shape_mismatches=0 errors=0 active=True target=backend.nn.anima.Block.forward behavior=call_original
+```
+
+Interpretation:
+
+- The wrapper was executed during real sampling, not only during generation setup.
+- The count `896` matches `32 sampling steps * 28 Anima blocks`.
+- The repeated `block_index=0` at calls `28`, `56`, `84`, ... confirms one full
+  28-block pass per sampling step.
+- Input and output shapes both stayed `2x1x96x96x2048`.
+- Input and output dtype stayed `torch.bfloat16`.
+- The output tensor stayed on `cuda:0`.
+- `shape_mismatches=0` and `errors=0` indicate that the identity wrapper did not
+  break the observed run.
+
+This verifies that Nz-fast-anima can route the Anima block-level inference path
+through extension code and then return to Forge Neo's original implementation.
+
+## Pipeline interception notes
+
+For Anima T2I in Forge Neo, `backend.nn.anima.Block.forward` is currently the
+most practical interception point for sparse-attention experiments because it
+still receives the unflattened latent layout as `x_B_T_H_W_D`.
+
+Recommended interception pattern:
+
+1. Import `backend.nn.anima` only at generation time or patch time, not at
+   extension import time.
+2. Resolve `anima.Block` and save `Block.forward` before replacing it.
+3. Install the wrapper only when the active mode requires it.
+4. In the wrapper, verify the active mode before doing any experimental work.
+   If the mode is inactive, immediately call the saved original.
+5. Preserve the original function signature with `*args` and `**kwargs`.
+6. Log from inside the wrapper, preferably after the original call returns for
+   identity verification.
+7. Track call count, runtime block count, shape mismatches, and exceptions.
+8. Restore the original function on `Off`, unsupported model, mode change, and
+   script unload.
+
+Important pitfalls:
+
+- A log printed from `process_before_every_sampling` proves only that patch setup
+  ran. It does not prove that the patched function was executed.
+- A trustworthy interception log must be emitted from the replacement function
+  itself.
+- `SelfCrossAttention.compute_attention()` sees q/k/v after flattening, so it
+  cannot recover H/W/T by itself unless shape metadata is captured from
+  `Block.forward` and passed onward.
+- Do not leave `block_structure_trace` and an experimental `Block.forward` patch
+  active at the same time unless wrapper ordering is explicitly controlled.
+- The identity patch proves route control, not speedup or image-quality safety
+  for sparse attention. Algorithmic patches still require image and timing tests.
+
 Resolved by lightweight logging:
 
 - Runtime block count.
