@@ -58,16 +58,14 @@ def attention_info() -> dict[str, Any]:
 
         fn = _safe_getattr(attention, "attention_function")
         info["attention_backend"] = _safe_getattr(fn, "__name__", _safe_str(fn))
-        for name in dir(attention):
-            lname = name.lower()
-            if "sage" in lname:
-                info["sage_available"] = True
-            if "flash" in lname:
-                info["flash_available"] = True
-            if "xformers" in lname:
-                info["xformers_available"] = True
-            if "pytorch" in lname or "sdpa" in lname:
-                info["pytorch_available"] = True
+        info["sage_available"] = callable(_safe_getattr(attention, "sageattn"))
+        info["flash_available"] = callable(_safe_getattr(attention, "flash_attn_wrapper"))
+        xformers_module = _safe_getattr(attention, "xformers")
+        xformers_ops = _safe_getattr(xformers_module, "ops")
+        info["xformers_available"] = callable(
+            _safe_getattr(xformers_ops, "memory_efficient_attention")
+        )
+        info["pytorch_available"] = callable(_safe_getattr(attention, "attention_pytorch"))
     except Exception as exc:
         info["attention_error"] = _safe_str(exc)
 

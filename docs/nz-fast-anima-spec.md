@@ -250,6 +250,8 @@ UI:
 
 `Attention backend` が `Forge current/default` 以外の場合は、`Debug log mode=Off` でも attention kernel 実験として有効になる。実験時は `attention_kernel_call` と `attention_kernel_summary` をログに出す。ログには `requested_backend`、Forge 内部で観測できた `actual_backend`、`internal_fallback`、`actual_backends` を含め、指定 backend 関数が内部で `pytorch_sdpa` に fallback していないかを確認できるようにする。
 
+実機検証では `attention_sage` は `actual_backends=sage:1792`、`internal_fallbacks=0` で最速だった。`attention_flash` は `actual_backends=flash:1792` で動作したが、総生成時間は `attention_sage` より長かった。`attention_xformers` は対象環境で `xformers` 実体が import されておらず、内部で `pytorch_sdpa_fallback` へ落ち、cross attention で shape mismatch を起こしたため unsafe と扱う。`xformers` が実体として利用できない場合は、Nz-fast-anima は `attention_xformers` の実行を避けて元の attention 経路へ戻す。
+
 #### 2D sparse attention / NATTEN controls
 
 目的:

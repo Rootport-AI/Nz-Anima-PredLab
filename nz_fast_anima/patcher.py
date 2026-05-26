@@ -390,6 +390,9 @@ def _apply_attention_kernel_patch() -> PatchResult:
             )
         context = STATE.attention_kernel_current_context or {}
         try:
+            unavailable_reason = _attention_backend_unavailable_reason(STATE.attention_backend)
+            if unavailable_reason:
+                raise RuntimeError(unavailable_reason)
             backend_fn = _attention_backend_function(STATE.attention_backend)
             if backend_fn is None:
                 raise RuntimeError(f"attention backend not found: {STATE.attention_backend}")
@@ -488,11 +491,28 @@ def _should_replace_attention_kernel(attn_module: Any) -> bool:
 def _attention_backend_function(name: str) -> Any | None:
     if name == ATTENTION_BACKEND_CURRENT:
         return None
+    if _attention_backend_unavailable_reason(name):
+        return None
     try:
         from backend import attention
     except Exception:
         return None
     return getattr(attention, name, None)
+
+
+def _attention_backend_unavailable_reason(name: str) -> str:
+    try:
+        from backend import attention
+    except Exception as exc:
+        return f"backend.attention import failed: {exc}"
+    if name == "attention_xformers":
+        xformers_module = getattr(attention, "xformers", None)
+        xformers_ops = getattr(xformers_module, "ops", None)
+        if not callable(getattr(xformers_ops, "memory_efficient_attention", None)):
+            return "xformers is not available in backend.attention"
+    if not callable(getattr(attention, name, None)):
+        return f"attention backend function is not callable: {name}"
+    return ""
 
 
 def _compute_attention_with_backend(backend_fn: Any, q: Any, k: Any, v: Any, transformer_options: dict[str, Any]):
