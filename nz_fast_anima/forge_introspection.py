@@ -118,6 +118,32 @@ def lowbit_info(sd_model: Any) -> dict[str, Any]:
     return info
 
 
+def model_structure_info(sd_model: Any) -> dict[str, Any]:
+    info: dict[str, Any] = {}
+    diffusion_model = _diffusion_model(sd_model)
+    if diffusion_model is None:
+        return {"structure_error": "diffusion_model unavailable"}
+
+    blocks = _safe_getattr(diffusion_model, "blocks")
+    info["diffusion_model_class"] = type(diffusion_model).__name__
+    info["num_blocks"] = len(blocks) if blocks is not None else None
+    for name in ("patch_spatial", "patch_temporal", "in_channels", "out_channels"):
+        value = _safe_getattr(diffusion_model, name)
+        if value is not None:
+            info[name] = value
+
+    if blocks:
+        first_block = blocks[0]
+        self_attn = _safe_getattr(first_block, "self_attn")
+        cross_attn = _safe_getattr(first_block, "cross_attn")
+        info["block_class"] = type(first_block).__name__
+        info["self_heads"] = _safe_getattr(self_attn, "n_heads")
+        info["self_head_dim"] = _safe_getattr(self_attn, "head_dim")
+        info["cross_heads"] = _safe_getattr(cross_attn, "n_heads")
+        info["cross_head_dim"] = _safe_getattr(cross_attn, "head_dim")
+    return info
+
+
 def cond_info(params: Any) -> dict[str, Any]:
     denoiser = _safe_getattr(params, "denoiser")
     p = _safe_getattr(denoiser, "p")
@@ -152,3 +178,17 @@ def cond_info(params: Any) -> dict[str, Any]:
         "uncond_indices": opt("uncond_indices"),
         "transformer_options_stage": "not_created_at_cfg_denoiser_callback",
     }
+
+
+def _diffusion_model(sd_model: Any) -> Any:
+    try:
+        forge_objects = _safe_getattr(sd_model, "forge_objects")
+        unet = None
+        if isinstance(forge_objects, dict):
+            unet = forge_objects.get("unet")
+        else:
+            unet = _safe_getattr(forge_objects, "unet")
+        model = _safe_getattr(unet, "model")
+        return _safe_getattr(model, "diffusion_model")
+    except Exception:
+        return None

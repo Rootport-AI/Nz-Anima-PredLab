@@ -3,7 +3,13 @@ from __future__ import annotations
 from typing import Any
 
 from . import __version__
-from .forge_introspection import attention_info, cond_info, lowbit_info, processing_info
+from .forge_introspection import (
+    attention_info,
+    cond_info,
+    lowbit_info,
+    model_structure_info,
+    processing_info,
+)
 from .logging import info, warning
 from .model_detect import ModelDetection
 from .state import (
@@ -53,6 +59,7 @@ def log_generation_start(p: Any) -> None:
 
     log_attention_trace()
     log_lowbit_trace()
+    log_model_structure_trace()
 
     STATE.generation_logged = True
 
@@ -79,6 +86,14 @@ def log_lowbit_trace() -> None:
         info("lowbit_info=unavailable")
         return
     info(" ".join(f"{key}={_fmt(value)}" for key, value in data.items()))
+
+
+def log_model_structure_trace() -> None:
+    data = model_structure_info(_current_sd_model())
+    if not data:
+        info("model_structure=unavailable")
+        return
+    info("model_structure=" + " ".join(f"{key}={_fmt(value)}" for key, value in data.items()))
 
 
 def log_cond_trace(params: Any) -> None:

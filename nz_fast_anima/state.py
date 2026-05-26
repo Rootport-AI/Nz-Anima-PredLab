@@ -33,6 +33,9 @@ class RuntimeState:
     denoiser_calls: int = 0
     cond_trace_logged: bool = False
     cond_batch_trace_logged: bool = False
+    block_trace_call_count: int = 0
+    block_trace_qkv_logged: set[tuple[int, str]] = field(default_factory=set)
+    current_block_index: int | None = None
     generation_logged: bool = False
     generation_start_source: str | None = None
     patches: dict[str, Any] = field(default_factory=dict)
@@ -77,6 +80,9 @@ class RuntimeState:
         self.denoiser_calls = 0
         self.cond_trace_logged = False
         self.cond_batch_trace_logged = False
+        self.block_trace_call_count = 0
+        self.block_trace_qkv_logged.clear()
+        self.current_block_index = None
         self.generation_logged = False
         self.error_message = None
         if not self.enabled or self.mode == MODE_OFF:

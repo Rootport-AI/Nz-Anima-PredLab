@@ -220,6 +220,67 @@ Implication for Phase 5:
   so a robust sparse experiment likely needs to patch inside `backend.nn.anima.Block`
   or `SelfCrossAttention`, not only `backend.attention.attention_function`.
 
+### Resolved: self-attention vs cross-attention separation
+
+This item is resolved by reading `backend/nn/anima.py`.
+
+`Block.__init__()` creates two separate attention modules:
+
+- `self.self_attn = SelfCrossAttention(x_dim, None, ...)`
+- `self.cross_attn = SelfCrossAttention(x_dim, context_dim, ...)`
+
+`SelfCrossAttention.__init__()` sets:
+
+```text
+self.is_SelfAttn = context_dim is None
+```
+
+`Block.forward()` then calls self-attention and cross-attention in distinct sections:
+
+- self-attention consumes the normalized latent tokens and passes `context=None`.
+- cross-attention consumes the normalized latent tokens and passes `crossattn_emb`.
+
+Both calls flatten latent layout with `b t h w d -> b (t h w) d` before entering
+`SelfCrossAttention.forward()`, then reshape back to `b t h w d` after attention.
+
+Conclusion:
+
+- The code-level distinction between self-attention and cross-attention is explicit.
+- 2D sparse attention should target self-attention first.
+- Cross-attention should remain unchanged in the first sparse experiment because its
+  key/value sequence comes from text/context embeddings rather than the 2D latent grid.
+- `Block.forward()` is the safest place to observe `B/T/H/W/D` and block order before
+  layout is flattened.
+
+## Remaining information classification
+
+Items that source reading can resolve or largely resolve:
+
+- self-attention / cross-attention separation: resolved as above.
+- Whether `Block.forward()` has H/W/T information before attention flattening:
+  resolved. It has `B, T, H, W, D = x_B_T_H_W_D.shape`.
+- Whether `compute_attention()` receives H/W/T directly: source says no. It receives
+  q/k/v after flattening unless `Block.forward()` or an equivalent wrapper passes
+  shape metadata through `transformer_options`.
+- NATTEN nominal compatibility: NATTEN docs list PyTorch `2.11.0+cu130` wheels, but
+  Windows builds are described as experimental and not regularly tested.
+
+Items that lightweight diagnostic logging can resolve:
+
+- runtime `len(blocks)`.
+- block index/order during the first denoiser call.
+- per-block `x_B_T_H_W_D` shape and rough block time.
+- q/k/v shape for self-attention and cross-attention.
+- `crossattn_emb` shape.
+- model `patch_spatial`, `patch_temporal`, `num_heads`, and `head_dim`.
+
+Items that require algorithmic experiments:
+
+- Which block range can use 2D sparse attention without visible degradation.
+- Which window size / dilation / stride is acceptable.
+- Whether NATTEN is faster than a simpler dependency-free prototype in this workload.
+- Whether low-bit / compile preserves image quality and improves repeated generation time.
+
 ## Cond/uncond behavior
 
 Relevant source:
@@ -343,4 +404,3 @@ nz_fast_anima/forge_introspection.py
   (`ER SDE`, `Euler a`), or do some samplers call the denoiser multiple times per UI
   step?
 - Is `state.sampling_step` reliable for average step timing with second-order samplers?
-
