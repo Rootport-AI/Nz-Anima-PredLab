@@ -3,8 +3,8 @@ from __future__ import annotations
 from .state import STATE
 
 
-def start_sampling() -> None:
-    STATE.reset_generation()
+def start_sampling(source: str = "unknown") -> None:
+    STATE.reset_generation(source)
 
 
 def step_start() -> None:

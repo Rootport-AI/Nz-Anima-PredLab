@@ -36,6 +36,7 @@ class RuntimeState:
     denoiser_calls: int = 0
     cond_trace_logged: bool = False
     generation_logged: bool = False
+    generation_start_source: str | None = None
     patches: dict[str, Any] = field(default_factory=dict)
 
     def refresh_settings(self) -> None:
@@ -55,11 +56,24 @@ class RuntimeState:
             self.status = "error"
             self.error_message = f"failed to read settings: {exc}"
 
+    def apply_options(
+        self,
+        enabled: bool,
+        mode: str,
+        print_timing_log: bool,
+        verbose_diagnose_log: bool,
+    ) -> None:
+        self.enabled = bool(enabled)
+        self.mode = mode if mode in MODES else MODE_OFF
+        self.print_timing_log = bool(print_timing_log)
+        self.verbose_diagnose_log = bool(verbose_diagnose_log)
+
     def active(self) -> bool:
         return self.enabled and self.mode != MODE_OFF
 
-    def reset_generation(self) -> None:
+    def reset_generation(self, source: str = "unknown") -> None:
         self.generation_start = perf_counter()
+        self.generation_start_source = source
         self.step_start = None
         self.step_durations.clear()
         self.denoiser_calls = 0
