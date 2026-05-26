@@ -92,12 +92,20 @@ def log_cond_trace(params: Any) -> None:
     info(
         "cfg="
         f"{data.get('cfg_scale')} uncond_present={not data.get('text_uncond_is_none')} "
-        f"denoiser_step={data.get('step')}/{data.get('total_steps')}"
+        f"sampling_step={data.get('sampling_step')}/{data.get('total_sampling_steps')} "
+        f"denoiser_step={data.get('denoiser_step')}/{data.get('denoiser_total_steps')}"
     )
     info(
         "cond_or_uncond="
         f"{data.get('cond_or_uncond')} cond_indices={data.get('cond_indices')} "
-        f"uncond_indices={data.get('uncond_indices')}"
+        f"uncond_indices={data.get('uncond_indices')} "
+        f"stage={data.get('transformer_options_stage')}"
+    )
+    info(
+        "cond_shapes="
+        f"x={data.get('x_shape')} sigma={data.get('sigma_shape')} "
+        f"text_cond_type={data.get('text_cond_type')} "
+        f"text_uncond_type={data.get('text_uncond_type')}"
     )
     STATE.cond_trace_logged = True
 

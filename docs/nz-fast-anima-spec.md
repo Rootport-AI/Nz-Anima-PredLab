@@ -398,17 +398,27 @@ avg_step_time = sum(step_durations) / len(step_durations)
 
 - `params.text_uncond is None`
 - CFG scale
+- `params.sampling_step`
+- `params.total_sampling_steps`
 - `params.denoiser.step`
 - `params.denoiser.total_steps`
-- `transformer_options.cond_or_uncond`
-- `transformer_options.cond_indices`
-- `transformer_options.uncond_indices`
+- latent / sigma shape
+- text cond / uncond type
+- `transformer_options.cond_or_uncond` が通常 callback 時点で見えるかどうか
+- `transformer_options.cond_indices` が通常 callback 時点で見えるかどうか
+- `transformer_options.uncond_indices` が通常 callback 時点で見えるかどうか
 - cond/uncond が同一 model call に batch されている可能性
 
 診断目的:
 
 - Forge Neo の `calc_cond_uncond_batch()` が通常ケースで十分に働いているかを確認する。
 - `CFG=1.0` の uncond 省略が Anima でも働くかを確認する。
+
+実測での注意:
+
+- Forge Neo `neo` の `CFGDenoiserParams` では、sampling step は `sampling_step` / `total_sampling_steps` として渡される。
+- `transformer_options.cond_or_uncond`、`cond_indices`、`uncond_indices` は `cfg_denoiser_callback` の後、`backend.sampling.sampling_function.calc_cond_uncond_batch()` 内で作られるため、通常 callback だけでは直接観測できない。
+- これらを正確に観測するには、将来的に `calc_cond_uncond_batch()` または `model.apply_model()` 直前の軽量診断 wrapper が必要になる。
 
 ### 10.5 Low-bit / compile trace
 

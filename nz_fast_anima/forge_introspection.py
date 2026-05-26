@@ -19,6 +19,16 @@ def _safe_str(value: Any) -> str:
         return f"<unprintable {type(value).__name__}>"
 
 
+def _shape(value: Any) -> str:
+    shape = _safe_getattr(value, "shape")
+    if shape is None:
+        return ""
+    try:
+        return "x".join(str(part) for part in shape)
+    except Exception:
+        return _safe_str(shape)
+
+
 def processing_info(p: Any) -> dict[str, Any]:
     width = _safe_getattr(p, "width")
     height = _safe_getattr(p, "height")
@@ -79,7 +89,8 @@ def lowbit_info(sd_model: Any) -> dict[str, Any]:
         from backend.args import dynamic_args
 
         ops = _safe_getattr(dynamic_args, "ops")
-        info["forge_ops"] = type(ops).__name__ if ops is not None else ""
+        info["forge_ops"] = _safe_str(ops)
+        info["forge_ops_type"] = type(ops).__name__ if ops is not None else ""
     except Exception as exc:
         info["forge_ops_error"] = _safe_str(exc)
 
@@ -109,6 +120,7 @@ def lowbit_info(sd_model: Any) -> dict[str, Any]:
 
 def cond_info(params: Any) -> dict[str, Any]:
     denoiser = _safe_getattr(params, "denoiser")
+    p = _safe_getattr(denoiser, "p")
     transformer_options = _safe_getattr(params, "transformer_options", {})
     if transformer_options is None:
         transformer_options = {}
@@ -118,12 +130,25 @@ def cond_info(params: Any) -> dict[str, Any]:
             return transformer_options.get(name)
         return _safe_getattr(transformer_options, name)
 
+    cfg_scale = _safe_getattr(params, "cond_scale")
+    if cfg_scale is None:
+        cfg_scale = _safe_getattr(params, "cfg_scale")
+    if cfg_scale is None:
+        cfg_scale = _safe_getattr(p, "cfg_scale")
+
     return {
         "text_uncond_is_none": _safe_getattr(params, "text_uncond") is None,
-        "cfg_scale": _safe_getattr(params, "cond_scale", _safe_getattr(params, "cfg_scale")),
-        "step": _safe_getattr(denoiser, "step"),
-        "total_steps": _safe_getattr(denoiser, "total_steps"),
+        "text_cond_type": type(_safe_getattr(params, "text_cond")).__name__,
+        "text_uncond_type": type(_safe_getattr(params, "text_uncond")).__name__,
+        "x_shape": _shape(_safe_getattr(params, "x")),
+        "sigma_shape": _shape(_safe_getattr(params, "sigma")),
+        "cfg_scale": cfg_scale,
+        "sampling_step": _safe_getattr(params, "sampling_step"),
+        "total_sampling_steps": _safe_getattr(params, "total_sampling_steps"),
+        "denoiser_step": _safe_getattr(denoiser, "step"),
+        "denoiser_total_steps": _safe_getattr(denoiser, "total_steps"),
         "cond_or_uncond": opt("cond_or_uncond"),
         "cond_indices": opt("cond_indices"),
         "uncond_indices": opt("uncond_indices"),
+        "transformer_options_stage": "not_created_at_cfg_denoiser_callback",
     }
