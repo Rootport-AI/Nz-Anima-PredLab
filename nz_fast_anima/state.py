@@ -32,6 +32,7 @@ class RuntimeState:
     step_durations: list[float] = field(default_factory=list)
     denoiser_calls: int = 0
     cond_trace_logged: bool = False
+    cond_batch_trace_logged: bool = False
     generation_logged: bool = False
     generation_start_source: str | None = None
     patches: dict[str, Any] = field(default_factory=dict)
@@ -75,6 +76,7 @@ class RuntimeState:
         self.step_durations.clear()
         self.denoiser_calls = 0
         self.cond_trace_logged = False
+        self.cond_batch_trace_logged = False
         self.generation_logged = False
         self.error_message = None
         if not self.enabled or self.mode == MODE_OFF:

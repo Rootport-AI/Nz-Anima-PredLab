@@ -407,6 +407,7 @@ avg_step_time = sum(step_durations) / len(step_durations)
 - `transformer_options.cond_or_uncond` が通常 callback 時点で見えるかどうか
 - `transformer_options.cond_indices` が通常 callback 時点で見えるかどうか
 - `transformer_options.uncond_indices` が通常 callback 時点で見えるかどうか
+- 診断 wrapper が有効な場合、`model.apply_model()` 直前の `cond_or_uncond` / `cond_indices` / `uncond_indices`
 - cond/uncond が同一 model call に batch されている可能性
 
 診断目的:
@@ -418,7 +419,8 @@ avg_step_time = sum(step_durations) / len(step_durations)
 
 - Forge Neo `neo` の `CFGDenoiserParams` では、sampling step は `sampling_step` / `total_sampling_steps` として渡される。
 - `transformer_options.cond_or_uncond`、`cond_indices`、`uncond_indices` は `cfg_denoiser_callback` の後、`backend.sampling.sampling_function.calc_cond_uncond_batch()` 内で作られるため、通常 callback だけでは直接観測できない。
-- これらを正確に観測するには、将来的に `calc_cond_uncond_batch()` または `model.apply_model()` 直前の軽量診断 wrapper が必要になる。
+- これらを正確に観測するには、`calc_cond_uncond_batch()` または `model.apply_model()` 直前の軽量診断 wrapper が必要になる。
+- 初期診断版では、`calc_cond_uncond_batch()` に軽量 wrapper を当て、`model_function_wrapper` 経由で `model.apply_model()` 直前の batch 構成を1 generationにつき1回だけログ出力する。この wrapper は出力 tensor を変更しない。
 
 ### 10.5 Low-bit / compile trace
 
