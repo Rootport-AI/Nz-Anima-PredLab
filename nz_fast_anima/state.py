@@ -91,6 +91,10 @@ class RuntimeState:
     attention_kernel_logged_calls: int = 0
     attention_kernel_num_blocks: int | None = None
     attention_kernel_current_context: dict[str, Any] | None = None
+    attention_kernel_actual_counts: dict[str, int] = field(default_factory=dict)
+    attention_kernel_internal_fallbacks: int = 0
+    attention_kernel_internal_errors: int = 0
+    attention_kernel_last_trace: dict[str, Any] | None = None
     sparse_block_calls: int = 0
     sparse_attention_calls: int = 0
     sparse_fallbacks: int = 0
@@ -229,6 +233,10 @@ class RuntimeState:
         self.attention_kernel_logged_calls = 0
         self.attention_kernel_num_blocks = None
         self.attention_kernel_current_context = None
+        self.attention_kernel_actual_counts.clear()
+        self.attention_kernel_internal_fallbacks = 0
+        self.attention_kernel_internal_errors = 0
+        self.attention_kernel_last_trace = None
         self.sparse_block_calls = 0
         self.sparse_attention_calls = 0
         self.sparse_fallbacks = 0

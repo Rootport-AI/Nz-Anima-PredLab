@@ -361,10 +361,6 @@ def _apply_attention_kernel_patch() -> PatchResult:
     if block_cls is None or attention_cls is None:
         return PatchResult(False, kind, "Anima Block/SelfCrossAttention not found")
 
-    backend_fn = _attention_backend_function(STATE.attention_backend)
-    if backend_fn is None:
-        return PatchResult(False, kind, f"attention backend not found: {STATE.attention_backend}")
-
     original_block_forward = block_cls.forward
     original_compute_attention = attention_cls.compute_attention
 
@@ -394,6 +390,9 @@ def _apply_attention_kernel_patch() -> PatchResult:
             )
         context = STATE.attention_kernel_current_context or {}
         try:
+            backend_fn = _attention_backend_function(STATE.attention_backend)
+            if backend_fn is None:
+                raise RuntimeError(f"attention backend not found: {STATE.attention_backend}")
             result = _compute_attention_with_backend(
                 backend_fn,
                 q,
@@ -405,10 +404,14 @@ def _apply_attention_kernel_patch() -> PatchResult:
             if STATE.attention_kernel_logged_calls < 12:
                 STATE.attention_kernel_logged_calls += 1
                 attn_type = "self" if getattr(self, "is_SelfAttn", False) else "cross"
+                trace = STATE.attention_kernel_last_trace or {}
                 info(
                     "attention_kernel_call="
                     f"call={STATE.attention_kernel_calls} block={context.get('block_index')} "
-                    f"type={attn_type} backend={STATE.attention_backend} "
+                    f"type={attn_type} requested_backend={STATE.attention_backend} "
+                    f"actual_backend={trace.get('actual_backend', 'unknown')} "
+                    f"internal_fallback={trace.get('internal_fallback', 'unknown')} "
+                    f"backend_trace={_format_attention_backend_trace(trace)} "
                     f"q_shape={_shape(q)} result_shape={_shape(result)}"
                 )
             return self.output_dropout(self.output_proj(result))
@@ -515,14 +518,167 @@ def _compute_attention_with_backend(backend_fn: Any, q: Any, k: Any, v: Any, tra
         -1,
         in_k_shape[-1],
     )
-    return backend_fn(
+    return _call_attention_backend_with_trace(
+        backend_fn,
         q_bhsd,
         k_bhsd,
         v_bhsd,
         in_q_shape[-2],
-        skip_reshape=True,
-        transformer_options=transformer_options,
+        transformer_options,
     )
+
+
+def _call_attention_backend_with_trace(
+    backend_fn: Any,
+    q: Any,
+    k: Any,
+    v: Any,
+    heads: int,
+    transformer_options: dict[str, Any],
+):
+    trace = {
+        "counts": {
+            "sage": 0,
+            "flash": 0,
+            "xformers": 0,
+            "pytorch_sdpa": 0,
+        },
+        "errors": [],
+        "trace_errors": [],
+        "actual_backend": "unknown",
+        "internal_fallback": False,
+    }
+    restores: list[tuple[Any, str, Any]] = []
+
+    try:
+        _install_attention_backend_trace_wrappers(trace, restores)
+        result = backend_fn(
+            q,
+            k,
+            v,
+            heads,
+            skip_reshape=True,
+            transformer_options=transformer_options,
+        )
+        _record_attention_backend_trace(trace)
+        return result
+    except Exception:
+        _record_attention_backend_trace(trace)
+        raise
+    finally:
+        for owner, name, original in reversed(restores):
+            try:
+                setattr(owner, name, original)
+            except Exception:
+                pass
+
+
+def _install_attention_backend_trace_wrappers(trace: dict[str, Any], restores: list[tuple[Any, str, Any]]) -> None:
+    try:
+        from backend import attention, operations
+    except Exception as exc:
+        trace["trace_errors"].append(f"import:{_short_error(exc)}")
+        return
+
+    _wrap_attention_callable(attention, "sageattn", "sage", trace, restores)
+    _wrap_attention_callable(attention, "flash_attn_wrapper", "flash", trace, restores)
+    xformers_ops = getattr(getattr(attention, "xformers", None), "ops", None)
+    _wrap_attention_callable(xformers_ops, "memory_efficient_attention", "xformers", trace, restores)
+    _wrap_attention_callable(operations, "scaled_dot_product_attention", "pytorch_sdpa", trace, restores)
+
+
+def _wrap_attention_callable(
+    owner: Any,
+    name: str,
+    label: str,
+    trace: dict[str, Any],
+    restores: list[tuple[Any, str, Any]],
+) -> None:
+    if owner is None or not hasattr(owner, name):
+        return
+    original = getattr(owner, name)
+    if not callable(original):
+        return
+
+    def traced_callable(*args, **kwargs):
+        trace["counts"][label] += 1
+        try:
+            return original(*args, **kwargs)
+        except Exception as exc:
+            trace["errors"].append(f"{label}:{_short_error(exc)}")
+            raise
+
+    try:
+        setattr(owner, name, traced_callable)
+        restores.append((owner, name, original))
+    except Exception as exc:
+        trace["trace_errors"].append(f"{label}:{_short_error(exc)}")
+
+
+def _record_attention_backend_trace(trace: dict[str, Any]) -> None:
+    actual_backend = _infer_actual_attention_backend(STATE.attention_backend, trace)
+    internal_fallback = _is_attention_internal_fallback(STATE.attention_backend, actual_backend, trace)
+    trace["actual_backend"] = actual_backend
+    trace["internal_fallback"] = internal_fallback
+    STATE.attention_kernel_last_trace = trace
+    STATE.attention_kernel_actual_counts[actual_backend] = (
+        STATE.attention_kernel_actual_counts.get(actual_backend, 0) + 1
+    )
+    if internal_fallback:
+        STATE.attention_kernel_internal_fallbacks += 1
+    STATE.attention_kernel_internal_errors += len(trace.get("errors", []))
+
+
+def _infer_actual_attention_backend(requested_backend: str, trace: dict[str, Any]) -> str:
+    counts = trace.get("counts", {})
+    if counts.get("pytorch_sdpa", 0):
+        if requested_backend == "attention_pytorch":
+            return "pytorch_sdpa"
+        return "pytorch_sdpa_fallback"
+    if counts.get("sage", 0):
+        return "sage"
+    if counts.get("flash", 0):
+        return "flash"
+    if counts.get("xformers", 0):
+        return "xformers"
+    if trace.get("trace_errors"):
+        return "trace_unavailable"
+    return "unobserved"
+
+
+def _is_attention_internal_fallback(requested_backend: str, actual_backend: str, trace: dict[str, Any]) -> bool:
+    if requested_backend == "attention_pytorch":
+        return False
+    if actual_backend.endswith("_fallback"):
+        return True
+    counts = trace.get("counts", {})
+    return bool(counts.get("pytorch_sdpa", 0))
+
+
+def _format_attention_backend_trace(trace: dict[str, Any] | None) -> str:
+    if not trace:
+        return ""
+    counts = trace.get("counts", {})
+    parts = [
+        f"sage:{counts.get('sage', 0)}",
+        f"flash:{counts.get('flash', 0)}",
+        f"xformers:{counts.get('xformers', 0)}",
+        f"pytorch_sdpa:{counts.get('pytorch_sdpa', 0)}",
+    ]
+    errors = trace.get("errors") or []
+    trace_errors = trace.get("trace_errors") or []
+    if errors:
+        parts.append(f"errors:{len(errors)}")
+    if trace_errors:
+        parts.append(f"trace_errors:{len(trace_errors)}")
+    return ",".join(parts)
+
+
+def _short_error(exc: Exception) -> str:
+    text = str(exc).replace("\n", " ")
+    if len(text) > 160:
+        return text[:157] + "..."
+    return text
 
 
 def _apply_sparse_attention_patch() -> PatchResult:

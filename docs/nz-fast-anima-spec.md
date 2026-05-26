@@ -248,7 +248,7 @@ UI:
 
 `Forge current/default` は実行環境で検出された本体設定をそのまま使う値である。対象環境では現時点で `attention_sage` と解釈する。
 
-`Attention backend` が `Forge current/default` 以外の場合は、`Debug log mode=Off` でも attention kernel 実験として有効になる。実験時は `attention_kernel_call` と `attention_kernel_summary` をログに出し、Anima の self/cross attention が Nz-fast-anima wrapper 経由で指定 backend を呼んだことを確認できるようにする。
+`Attention backend` が `Forge current/default` 以外の場合は、`Debug log mode=Off` でも attention kernel 実験として有効になる。実験時は `attention_kernel_call` と `attention_kernel_summary` をログに出す。ログには `requested_backend`、Forge 内部で観測できた `actual_backend`、`internal_fallback`、`actual_backends` を含め、指定 backend 関数が内部で `pytorch_sdpa` に fallback していないかを確認できるようにする。
 
 #### 2D sparse attention / NATTEN controls
 

@@ -229,6 +229,9 @@ def log_timing_summary() -> None:
             f"block_calls={STATE.attention_kernel_block_calls} "
             f"fallbacks={STATE.attention_kernel_fallbacks} "
             f"errors={STATE.attention_kernel_errors} "
+            f"internal_fallbacks={STATE.attention_kernel_internal_fallbacks} "
+            f"internal_errors={STATE.attention_kernel_internal_errors} "
+            f"actual_backends={_fmt_counts(STATE.attention_kernel_actual_counts)} "
             f"num_blocks={STATE.attention_kernel_num_blocks} "
             f"active={active} backend={STATE.attention_backend} "
             f"target={STATE.attention_target} "
@@ -240,6 +243,12 @@ def _seconds(value: float | int | None) -> str:
     if value is None:
         return "None"
     return f"{float(value):.3f}s"
+
+
+def _fmt_counts(value: dict[str, int]) -> str:
+    if not value:
+        return "None"
+    return ",".join(f"{key}:{value[key]}" for key in sorted(value))
 
 
 def _current_sd_model() -> Any:
