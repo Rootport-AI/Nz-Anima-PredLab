@@ -68,7 +68,20 @@
 
 調査結果は `docs/forge-neo-research.md` などの別ドキュメントにまとめる。
 
-初期検証対象は以下4つに限定する。
+初期検証対象は以下4つに限定する。ただし、2026-05-26時点のStabilityMatrix版 Forge Neo実測では、優先順位は以下とする。
+
+1. 2D sparse attention / NATTEN系実験
+2. 低bit化・compile
+3. attention kernel高速化
+4. cond/uncond処理最適化
+
+実測メモ:
+
+- Anima T2Iのlatentは `1x16x1x192x192` として観測された。T=1、H/W=192の5D latentである。
+- attention backendは `attention_sage` として観測され、Anima attention pathも有効だった。
+- CFG>1のcond/uncondは `cond_or_uncond=[1, 0]`、`input_shape=2x16x1x192x192` として同一model callにbatchされていた。
+- そのため、cond/uncond最適化は高速化の本命ではない。ただし十分な観測情報は取れているため、検証項目としては維持する。
+- 未検証条件として、CFG=1.0、negative prompt空、batch size > 1、複数prompt、特殊拡張併用時の挙動を残す。
 
 ### 5.1 attention kernel高速化
 
@@ -94,6 +107,7 @@
 目的:
 
 - Cosmos V2Wで使われるNATTEN / sparse attentionの発想を、Anima T2I向けの2D attentionへ応用できるか検証する。
+- 現状の実測では最優先の高速化候補とする。
 
 注意:
 
@@ -117,6 +131,8 @@
 目的:
 
 - CFG使用時のcond/uncond処理に無駄がないか確認する。
+- 初期調査では、CFG>1の通常生成においてcond/uncondが同一model callへbatchされていることを確認済み。
+- このため優先度は低いが、検証項目からは外さない。
 
 調査項目:
 
@@ -131,6 +147,13 @@
 - 品質変化なし。
 - 1step平均時間が5%以上短縮。
 - 既に最適化済みなら、深追いしない。
+
+現時点の扱い:
+
+- 優先度は低。
+- 通常CFG>1の単一画像生成では、既にForge Neo側で十分にbatch化されている可能性が高い。
+- CFG=1.0、negative prompt空、batch size > 1、複数prompt、特殊拡張併用時は未検証のため、必要に応じて追加調査する。
+- 診断wrapperは必要時のみ使い、標準のDiagnose onlyでは推論経路へ追加wrapperを入れない。
 
 ### 5.4 低bit化・compile
 
@@ -169,19 +192,17 @@ Forge NeoのUIに以下を追加する。
 
 - `Off`
 - `Diagnose only`
-- `Trace attention`
-- `Trace cond/uncond`
-- `Trace low-bit / compile`
-- `Fast attention kernel`
 - `Experimental 2D sparse attention`
-- `Cond/uncond optimization`
 - `Compile / low-bit experiment`
+- `Fast attention kernel`
+- `Cond/uncond optimization`
 
 初期MVPでは以下のみでもよい。
 
 - `Off`
 - `Diagnose only`
-- `Trace attention`
+
+`Diagnose only` は、attention、cond/uncond、低bit/compile関連の基礎情報を一括でコンソール出力する。個別Traceモードは、ログ量が増えすぎる段階まで追加しない。
 
 ### 6.3 Logging
 

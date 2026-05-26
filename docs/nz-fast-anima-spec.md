@@ -196,15 +196,30 @@ nzfa_mode
 - `Trace attention`
 - `Trace cond/uncond`
 - `Trace low-bit / compile`
-- `Fast attention kernel`
 - `Experimental 2D sparse attention`
-- `Cond/uncond optimization`
 - `Compile / low-bit experiment`
+- `Fast attention kernel`
+- `Cond/uncond optimization`
 
 動作:
 
 - `Off`: 明示的に無効。`Enable` が true でも処理しない。
 - `Diagnose only`: 基本情報、timing、attention、cond/uncond、low-bit / compile 関連情報を一括出力する。
+
+高速化実験の優先順位:
+
+1. `Experimental 2D sparse attention`
+2. `Compile / low-bit experiment`
+3. `Fast attention kernel`
+4. `Cond/uncond optimization`
+
+理由:
+
+- 実測では Anima T2I latent は `1x16x1x192x192` で、T=1、H/W=192 の5D latentとして扱える。
+- 実測では attention backend は `attention_sage` で、Anima attention path も有効だった。
+- 実測では CFG>1 の cond/uncond は `cond_or_uncond=[1, 0]`、`input_shape=2x16x1x192x192` として同一 model call に batch されていた。
+- そのため、cond/uncond 最適化は高速化の本命ではない。ただし検証項目として維持する。
+- CFG=1.0、negative prompt空、batch size > 1、複数prompt、特殊拡張併用時の挙動は未検証として残す。
 
 ### 7.3 Logging
 
@@ -407,7 +422,7 @@ avg_step_time = sum(step_durations) / len(step_durations)
 - `transformer_options.cond_or_uncond` が通常 callback 時点で見えるかどうか
 - `transformer_options.cond_indices` が通常 callback 時点で見えるかどうか
 - `transformer_options.uncond_indices` が通常 callback 時点で見えるかどうか
-- 診断 wrapper が有効な場合、`model.apply_model()` 直前の `cond_or_uncond` / `cond_indices` / `uncond_indices`
+- 必要時のみ有効にする診断 wrapper では、`model.apply_model()` 直前の `cond_or_uncond` / `cond_indices` / `uncond_indices`
 - cond/uncond が同一 model call に batch されている可能性
 
 診断目的:
@@ -420,7 +435,10 @@ avg_step_time = sum(step_durations) / len(step_durations)
 - Forge Neo `neo` の `CFGDenoiserParams` では、sampling step は `sampling_step` / `total_sampling_steps` として渡される。
 - `transformer_options.cond_or_uncond`、`cond_indices`、`uncond_indices` は `cfg_denoiser_callback` の後、`backend.sampling.sampling_function.calc_cond_uncond_batch()` 内で作られるため、通常 callback だけでは直接観測できない。
 - これらを正確に観測するには、`calc_cond_uncond_batch()` または `model.apply_model()` 直前の軽量診断 wrapper が必要になる。
-- 初期診断版では、`calc_cond_uncond_batch()` に軽量 wrapper を当て、`model_function_wrapper` 経由で `model.apply_model()` 直前の batch 構成を1 generationにつき1回だけログ出力する。この wrapper は出力 tensor を変更しない。
+- 2026-05-26の実測では、CFG>1の通常生成で `cond_or_uncond=[1, 0]`、`input_shape=2x16x1x192x192` が得られ、cond/uncondは同一 model call に batch されていた。
+- この結果により、cond/uncond最適化は低優先度とする。ただし検証項目からは外さない。
+- 未検証条件として、CFG=1.0、negative prompt空、batch size > 1、複数prompt、特殊拡張併用時のbatch構造を残す。
+- `calc_cond_uncond_batch()` の軽量診断 wrapper は必要時のみ使い、標準の `Diagnose only` では自動適用しない。
 
 ### 10.5 Low-bit / compile trace
 
@@ -475,12 +493,19 @@ is_patched(kind) -> bool
 
 patch 候補:
 
-- `backend.attention.attention_function`
+- `backend.nn.anima.Block.forward`
 - `backend.nn.anima.SelfCrossAttention.compute_attention`
 - `backend.nn.anima.SelfCrossAttention.torch_attention_op`
-- `backend.nn.anima.Block.forward`
+- `backend.attention.attention_function`
 
 2D sparse attention は、flatten 後の generic attention だけでは H/W 情報が失われるため、`Block.forward` または `SelfCrossAttention` 付近で形状情報を扱う方針とする。
+
+patch 優先順位:
+
+1. H/W/T 情報を保持できる `Block.forward` / `SelfCrossAttention` 付近での2D sparse attention実験。
+2. Forge Neoの低bit・compile機能をAnimaへ適用するためのmodel load / operation選択調査。
+3. attention backend差し替え。実測ではSageAttentionが既に使われているため優先度は中から低。
+4. cond/uncond最適化。実測で通常CFG>1は同一forward batch化済みのため優先度は低いが、未検証条件の確認項目として維持する。
 
 ## 13. Safety
 

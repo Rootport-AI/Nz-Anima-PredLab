@@ -7,7 +7,6 @@ from .callbacks import register_callbacks
 from .diagnostics import log_generation_start, log_timing_summary
 from .logging import exception
 from .model_detect import detect_model
-from .patcher import apply_patch, remove_patch
 from .state import MODE_OFF, MODES, STATE
 from .timing import start_sampling
 
@@ -76,7 +75,6 @@ def _apply_ui_args(script_args) -> None:
 def _begin_generation(p, script_args, source: str) -> None:
     _apply_ui_args(script_args)
     if not STATE.active():
-        remove_patch("cond_batch_trace")
         return
 
     start_sampling(source)
@@ -89,7 +87,6 @@ def _begin_generation(p, script_args, source: str) -> None:
         if STATE.model_detection is None:
             raise
 
-    apply_patch("cond_batch_trace")
     log_generation_start(p)
 
 
