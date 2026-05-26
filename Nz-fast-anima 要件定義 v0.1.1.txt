@@ -1,0 +1,385 @@
+# Nz-fast-anima 要件定義 v0.1.1
+
+## 1. 概要
+
+`Nz-fast-anima` は、StabilityMatrix版 Forge Neo / SD WebUI Forge Neo 上で、Anima / Cosmos-Predict2 系T2Iモデルの **1ステップあたりの推論時間短縮** を目的とする実験的拡張機能である。
+
+本拡張は、ステップ数削減・4step LoRA・スケジューラー最適化ではなく、既存の推論ステップ数を維持したまま、1step内部の計算を軽量化することを目指す。
+
+## 2. 目的
+
+主目的:
+
+- Anima base の1step推論時間を短縮する。
+- 品質を低下させない、または視覚的に無視できる範囲の劣化に抑える。
+- Forge Neoの通常UXを壊さず、チェックボックスで有効/無効を切り替えられるようにする。
+- 将来的にForge Neo公式側へ提案可能な実証データを作る。
+
+副目的:
+
+- Anima生成時のattention backend、cond/uncond処理、1step平均時間をログ出力する。
+- Forge Neo側の実装を調査し、attention、CFG、低bit化、compile、sampling callbackの実行経路をドキュメント化する。
+- RTX 40系Windows環境で実用的に動くことを優先する。
+- MIT Licenseで公開できる構成にする。
+
+## 3. 対象環境
+
+優先対象:
+
+- Windows 11
+- StabilityMatrix版 Forge Neo
+- NVIDIA GPU
+- Anima base / Cosmos-Predict2-2B-Text2Image derivative
+- txt2img
+- 1024×1024 〜 1536×1536
+- sampler: ER SDE / Euler a
+- steps: 30〜35前後
+- CFG: 4〜5前後
+
+初期段階では対象外:
+
+- img2img
+- Hires.fix
+- ControlNet
+- IP-Adapter
+- 参照画像系拡張
+- LoRA互換性の完全保証
+- 複数GPU
+- Linux専用最適化
+- ComfyUI対応
+
+## 4. 非目標
+
+本拡張は以下を目的としない。
+
+- ステップ数削減
+- 4step LoRA / Turbo LoRA
+- scheduler最適化
+- TeaCache / feature cache
+- 画風変更
+- 画質改善
+- ControlNet互換性の保証
+- すべてのForge Neoモデルへの対応
+- SDXL / Flux / Z-Image等の高速化
+
+## 5. 調査・検証対象の高速化手法
+
+初期段階では、各高速化手法を個別に実装して進めるのではなく、Forge Neo側の既存実装を先に調査し、実験対象とpatch pointを明確にする。
+
+調査結果は `docs/forge-neo-research.md` などの別ドキュメントにまとめる。
+
+初期検証対象は以下4つに限定する。
+
+### 5.1 attention kernel高速化
+
+目的:
+
+- 既存のfull attentionの意味を変えず、より高速なattention backendを使えるか確認する。
+
+調査項目:
+
+- Anima生成時に現在どのattention backendを通っているか。
+- PyTorch SDPA / FlashAttention / SageAttention / xFormers / 独自fallback のどれか。
+- Forge Neo側の高速attention設定がAnimaに効いているか。
+- `backend.nn.anima.SelfCrossAttention` から `backend.attention.attention_function` へ到達する実行経路を確認する。
+
+成功条件:
+
+- 画像品質が同等。
+- 1step平均時間が5%以上短縮。
+- 10%以上短縮できれば有望。
+
+### 5.2 2D sparse attention
+
+目的:
+
+- Cosmos V2Wで使われるNATTEN / sparse attentionの発想を、Anima T2I向けの2D attentionへ応用できるか検証する。
+
+注意:
+
+- Cosmos公式実装では、T==1の画像生成ではNATTENをskipして通常attentionへ戻る可能性がある。
+- そのため、Anima T2Iでは H×W の2D token gridとして扱う実験pathが必要。
+
+初期実験:
+
+- 後半層のみ2D sparse attentionを適用。
+- windowは大きめから開始。
+- 画質劣化が大きい場合は即時撤退。
+
+成功条件:
+
+- 目視で大きな破綻がない。
+- 1step平均時間が10%以上短縮。
+- 20〜30%以上なら強い成果。
+
+### 5.3 cond/uncond処理最適化
+
+目的:
+
+- CFG使用時のcond/uncond処理に無駄がないか確認する。
+
+調査項目:
+
+- cond/uncondが同一batchで処理されているか。
+- 別forwardになっていないか。
+- negative promptが空の場合の無駄な再計算がないか。
+- CFG=1.0時のuncond省略処理がAnimaでも機能するか。
+- Forge Neo既存の `calc_cond_uncond_batch` と `CFG=1.0` 最適化で十分か。
+
+成功条件:
+
+- 品質変化なし。
+- 1step平均時間が5%以上短縮。
+- 既に最適化済みなら、深追いしない。
+
+### 5.4 低bit化・compile
+
+目的:
+
+- torch.compile / mixed precision / 低bit matmul等でAnima 1stepを短縮できるか検証する。
+
+検証候補:
+
+- torch.compile
+- fp16 / bf16最適化
+- fp8 / int8 matmul
+- SageAttention系低精度kernel
+- `torch._scaled_mm` 利用可能性
+- Forge Neoの `using_forge_operations`、INT8、FP8、mixed precision 実装の再利用可能性
+
+成功条件:
+
+- 画質劣化がない、または極小。
+- 1step平均時間が10%以上短縮。
+- 初回compile時間と通常運用時の利益を分離して測定する。
+
+## 6. UI要件
+
+Forge NeoのUIに以下を追加する。
+
+### 6.1 基本設定
+
+- `Enable Nz-fast-anima`
+  - チェックボックス
+  - OFF時は通常のForge Neo推論に完全に戻る。
+
+### 6.2 Mode
+
+以下のモードを用意する。
+
+- `Off`
+- `Diagnose only`
+- `Trace attention`
+- `Trace cond/uncond`
+- `Trace low-bit / compile`
+- `Fast attention kernel`
+- `Experimental 2D sparse attention`
+- `Cond/uncond optimization`
+- `Compile / low-bit experiment`
+
+初期MVPでは以下のみでもよい。
+
+- `Off`
+- `Diagnose only`
+- `Trace attention`
+
+### 6.3 Logging
+
+- `Print timing log`
+  - 生成ごとに1step平均時間をコンソールへ出力する。
+- `Verbose diagnose log`
+  - attention backend、cond/uncond batch情報、モデル判定結果を出力する。
+
+### 6.4 Safety
+
+- Anima / Cosmos系モデル以外では自動的に無効化する。
+- 非対応モデルでは警告ログのみ出し、処理を変更しない。
+- エラー発生時は通常forwardへfallbackする。
+
+## 7. ログ要件
+
+`Diagnose only` または `Print timing log` 有効時、以下を出力する。
+
+必須:
+
+- Nz-fast-anima version
+- 有効/無効状態
+- model判定結果
+- sampler名
+- scheduler名
+- resolution
+- steps
+- CFG scale
+- total generation time
+- average step time
+- peak VRAM可能なら
+
+可能なら:
+
+- attention backend名
+- transformer block数
+- cond/uncond batch構造
+- model forward回数
+- model storage dtype
+- model computation dtype
+- Forge operation family
+- VAE decode時間
+- step外処理時間
+
+出力例:
+
+```text
+[Nz-fast-anima] enabled=True mode=Diagnose only
+[Nz-fast-anima] model=Anima/Cosmos-Predict2-2B
+[Nz-fast-anima] sampler=ER SDE scheduler=Normal steps=30 cfg=5.0
+[Nz-fast-anima] resolution=1536x1536
+[Nz-fast-anima] attention_backend=torch_sdpa
+[Nz-fast-anima] avg_step_time=1.234s total_sampling_time=37.02s
+```
+
+## 8. 実装方針
+
+### 8.1 拡張機能として実装する
+
+Forge Neo本体を直接改造しない。
+
+想定ディレクトリ:
+
+```text
+extensions/Nz-fast-anima/
+```
+
+基本構成:
+
+```text
+Nz-fast-anima/
+├── scripts/
+│   └── nz_fast_anima.py
+├── nz_fast_anima/
+│   ├── __init__.py
+│   ├── settings.py
+│   ├── model_detect.py
+│   ├── diagnostics.py
+│   ├── forge_introspection.py
+│   ├── patcher.py
+│   ├── attention.py
+│   ├── timing.py
+│   └── lowbit.py
+├── README.md
+└── LICENSE
+```
+
+`AGENTS.md` はCodex向けの開発者運用メモとして扱う。Claude Codeにおける `CLAUDE.md` と同様の位置づけであり、拡張機能そのものの必須構成物とは分けて管理する。
+
+### 8.2 callback利用
+
+Forge Neoのcallbackを利用する。
+
+候補:
+
+- `on_ui_settings`
+- `on_model_loaded`
+- `on_cfg_denoiser`
+- `on_cfg_denoised`
+- `on_cfg_after_cfg`
+- `on_script_unloaded`
+
+### 8.3 monkey patch方針
+
+初期段階では、調査・診断ログを優先し、patchは行わない。
+
+高速化実験段階では、Anima/Cosmos系モデルを検出した場合のみ、必要最小限のforwardまたはattention関数をpatchする。
+
+必須条件:
+
+- 元の関数を保存する。
+- OFF時またはunload時に元へ戻せる。
+- 多重patchを防ぐ。
+- 例外時に元のforwardへfallbackする。
+
+### 8.4 調査ドキュメント方針
+
+Forge Neo側の実装調査、実験候補、patch point、未解決事項は、要件定義書とは別のドキュメントで管理する。
+
+初期調査ドキュメント:
+
+- `docs/forge-neo-research.md`
+
+実装ロードマップやCodexへの具体的タスクも、必要になった時点で別ドキュメントへ分離する。
+
+## 9. 品質評価要件
+
+最低限、以下の比較を行う。
+
+固定条件:
+
+- 同一prompt
+- 同一negative prompt
+- 同一seed
+- 同一sampler
+- 同一scheduler
+- 同一steps
+- 同一CFG
+- 同一resolution
+
+比較対象:
+
+- baseline Forge Neo
+- Nz-fast-anima enabled
+
+評価:
+
+- 総生成時間
+- 平均step時間
+- 画像の目視比較
+- 可能ならPSNR / SSIM / LPIPS
+- 顔、瞳、手、線画、髪、背景の破綻有無
+
+## 10. 成功基準
+
+### MVP成功
+
+- Forge Neo拡張として読み込まれる。
+- UIにEnableチェックボックスが出る。
+- Anima/Cosmos系モデルを検出できる。
+- Diagnose onlyで1step平均時間を出力できる。
+- attention backend、cond/uncond、低bit/compile関連の診断情報を出力できる。
+- OFF時に通常推論へ戻る。
+
+### 高速化成功
+
+- 品質同等で5%以上高速化。
+- 10%以上なら実用価値あり。
+- 20%以上なら公開時に強く訴求できる。
+- 30%以上ならForge Neo公式への提案候補。
+
+## 11. 失敗条件
+
+以下の場合は、その高速化方式を保留または撤退する。
+
+- 画像品質が明確に劣化する。
+- 顔・瞳・手・線画が崩れる。
+- 速度向上が5%未満。
+- VRAM使用量が大きく増える。
+- Windows環境で導入が困難。
+- Forge Neoの通常機能を壊す。
+- Anima以外のモデルに副作用が出る。
+
+## 12. ライセンス
+
+MIT Licenseで公開する。
+
+ただし、依存ライブラリのライセンスを確認すること。
+
+特に確認対象:
+
+- Forge Neo
+- k-diffusion
+- NATTEN
+- FlashAttention
+- SageAttention
+- xFormers
+- PyTorch関連コード
+- 参考にしたComfyUI custom node
+
+他者実装を取り込む場合は、ライセンス互換性を必ず確認する。
