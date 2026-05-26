@@ -14,6 +14,7 @@ from .logging import info, warning
 from .model_detect import ModelDetection
 from .state import (
     MODE_DIAGNOSE,
+    MODE_IDENTITY_PATCH,
     STATE,
 )
 from .timing import timing_summary
@@ -128,7 +129,7 @@ def log_cond_trace(params: Any) -> None:
 def log_timing_summary() -> None:
     if not STATE.active():
         return
-    if not STATE.print_timing_log and STATE.mode != MODE_DIAGNOSE:
+    if not STATE.print_timing_log and STATE.mode not in (MODE_DIAGNOSE, MODE_IDENTITY_PATCH):
         return
     data = timing_summary()
     total = data["total_sampling_time"]
@@ -141,6 +142,22 @@ def log_timing_summary() -> None:
         f"total_sampling_time={_seconds(total)} min_step_time={_seconds(min_step)} "
         f"max_step_time={_seconds(max_step)} status={STATE.status}"
     )
+    if STATE.mode == MODE_IDENTITY_PATCH:
+        try:
+            from .patcher import is_patched
+
+            active = is_patched("block_forward_identity")
+        except Exception:
+            active = "unknown"
+        info(
+            "identity_patch_summary="
+            f"calls={STATE.identity_patch_calls} "
+            f"num_blocks={STATE.identity_patch_num_blocks} "
+            f"logged_calls={STATE.identity_patch_logged_calls} "
+            f"shape_mismatches={STATE.identity_patch_shape_mismatches} "
+            f"errors={STATE.identity_patch_errors} active={active} "
+            "target=backend.nn.anima.Block.forward behavior=call_original"
+        )
 
 
 def _seconds(value: float | int | None) -> str:

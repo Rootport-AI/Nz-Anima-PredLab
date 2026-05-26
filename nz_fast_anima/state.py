@@ -7,6 +7,7 @@ from typing import Any
 
 MODE_OFF = "Off"
 MODE_DIAGNOSE = "Diagnose only"
+MODE_IDENTITY_PATCH = "Identity patch test"
 MODE_TRACE_ATTENTION = "Trace attention"
 MODE_TRACE_COND = "Trace cond/uncond"
 MODE_TRACE_LOWBIT = "Trace low-bit / compile"
@@ -14,6 +15,7 @@ MODE_TRACE_LOWBIT = "Trace low-bit / compile"
 MODES = [
     MODE_OFF,
     MODE_DIAGNOSE,
+    MODE_IDENTITY_PATCH,
 ]
 
 
@@ -36,6 +38,11 @@ class RuntimeState:
     block_trace_call_count: int = 0
     block_trace_qkv_logged: set[tuple[int, str]] = field(default_factory=set)
     current_block_index: int | None = None
+    identity_patch_calls: int = 0
+    identity_patch_logged_calls: int = 0
+    identity_patch_shape_mismatches: int = 0
+    identity_patch_errors: int = 0
+    identity_patch_num_blocks: int | None = None
     generation_logged: bool = False
     generation_start_source: str | None = None
     patches: dict[str, Any] = field(default_factory=dict)
@@ -83,12 +90,19 @@ class RuntimeState:
         self.block_trace_call_count = 0
         self.block_trace_qkv_logged.clear()
         self.current_block_index = None
+        self.identity_patch_calls = 0
+        self.identity_patch_logged_calls = 0
+        self.identity_patch_shape_mismatches = 0
+        self.identity_patch_errors = 0
+        self.identity_patch_num_blocks = None
         self.generation_logged = False
         self.error_message = None
         if not self.enabled or self.mode == MODE_OFF:
             self.status = "disabled"
         elif self.mode == MODE_DIAGNOSE:
             self.status = "diagnosing"
+        elif self.mode == MODE_IDENTITY_PATCH:
+            self.status = "identity-patch"
         else:
             self.status = "trace"
 

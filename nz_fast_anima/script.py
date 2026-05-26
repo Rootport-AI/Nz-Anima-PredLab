@@ -8,7 +8,7 @@ from .diagnostics import log_generation_start, log_timing_summary
 from .logging import exception
 from .model_detect import detect_model
 from .patcher import apply_patch, remove_patch
-from .state import MODE_OFF, MODES, STATE
+from .state import MODE_DIAGNOSE, MODE_IDENTITY_PATCH, MODE_OFF, MODES, STATE
 from .timing import start_sampling
 
 register_callbacks()
@@ -76,7 +76,7 @@ def _apply_ui_args(script_args) -> None:
 def _begin_generation(p, script_args, source: str) -> None:
     _apply_ui_args(script_args)
     if not STATE.active():
-        remove_patch("block_structure_trace")
+        _remove_generation_patches()
         return
 
     start_sampling(source)
@@ -89,8 +89,31 @@ def _begin_generation(p, script_args, source: str) -> None:
         if STATE.model_detection is None:
             raise
 
-    apply_patch("block_structure_trace")
+    if not getattr(STATE.model_detection, "supported", False):
+        _remove_generation_patches()
+        log_generation_start(p)
+        return
+
+    _configure_generation_patches()
     log_generation_start(p)
+
+
+def _configure_generation_patches() -> None:
+    if STATE.mode == MODE_IDENTITY_PATCH:
+        remove_patch("block_structure_trace")
+        apply_patch("block_forward_identity")
+        return
+
+    remove_patch("block_forward_identity")
+    if STATE.mode == MODE_DIAGNOSE and STATE.verbose_diagnose_log:
+        apply_patch("block_structure_trace")
+    else:
+        remove_patch("block_structure_trace")
+
+
+def _remove_generation_patches() -> None:
+    remove_patch("block_structure_trace")
+    remove_patch("block_forward_identity")
 
 
 def _default_option(key: str, default):

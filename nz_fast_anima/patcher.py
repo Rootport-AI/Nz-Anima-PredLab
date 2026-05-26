@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
 
-from .logging import info, warning
-from .state import STATE
+from .logging import exception, info, warning
+from .state import MODE_IDENTITY_PATCH, STATE
 
 
 @dataclass
@@ -20,6 +20,8 @@ def apply_patch(kind: str, context: Any = None) -> PatchResult:
         return _apply_cond_batch_trace_patch()
     if kind == "block_structure_trace":
         return _apply_block_structure_trace_patch()
+    if kind == "block_forward_identity":
+        return _apply_block_forward_identity_patch()
     warning(f"patch '{kind}' is not implemented in the diagnostic build")
     return PatchResult(False, kind, "not implemented")
 
@@ -210,3 +212,122 @@ def _should_trace_qkv(key: tuple[int, str]) -> bool:
         and key not in STATE.block_trace_qkv_logged
         and len(STATE.block_trace_qkv_logged) < 128
     )
+
+
+def _apply_block_forward_identity_patch() -> PatchResult:
+    kind = "block_forward_identity"
+    if is_patched(kind):
+        return PatchResult(True, kind, "already patched")
+
+    try:
+        from backend.nn import anima
+    except Exception as exc:
+        return PatchResult(False, kind, f"import failed: {exc}")
+
+    block_cls = getattr(anima, "Block", None)
+    if block_cls is None:
+        return PatchResult(False, kind, "Anima Block not found")
+
+    original_block_forward = block_cls.forward
+
+    def identity_block_forward(self, x_B_T_H_W_D, *args, **kwargs):
+        if not _should_identity_patch():
+            return original_block_forward(self, x_B_T_H_W_D, *args, **kwargs)
+
+        _ensure_identity_num_blocks()
+        call_index = STATE.identity_patch_calls
+        STATE.identity_patch_calls += 1
+        block_index = _identity_block_index(call_index)
+
+        try:
+            output = original_block_forward(self, x_B_T_H_W_D, *args, **kwargs)
+        except Exception:
+            STATE.identity_patch_errors += 1
+            STATE.set_error("identity patch failed inside Anima Block.forward")
+            exception("identity_patch_exception target=backend.nn.anima.Block.forward")
+            raise
+
+        same_shape = _shape(output) == _shape(x_B_T_H_W_D)
+        if not same_shape:
+            STATE.identity_patch_shape_mismatches += 1
+
+        if _should_log_identity_call(call_index, block_index):
+            STATE.identity_patch_logged_calls += 1
+            info(
+                "identity_patch_call="
+                f"call={call_index} block_index={block_index} "
+                f"input_shape={_shape(x_B_T_H_W_D)} output_shape={_shape(output)} "
+                f"same_shape={same_shape} input_dtype={_dtype(x_B_T_H_W_D)} "
+                f"output_dtype={_dtype(output)} device={_device(output)} "
+                "route=Nz-fast-anima->original_Block.forward"
+            )
+
+        return output
+
+    block_cls.forward = identity_block_forward
+
+    def restore() -> None:
+        block_cls.forward = original_block_forward
+
+    STATE.patches[kind] = {"restore": restore}
+    info(
+        "applied identity patch kind=block_forward_identity "
+        "target=backend.nn.anima.Block.forward behavior=call_original"
+    )
+    return PatchResult(True, kind, "applied")
+
+
+def _should_identity_patch() -> bool:
+    return STATE.active() and STATE.mode == MODE_IDENTITY_PATCH
+
+
+def _ensure_identity_num_blocks() -> None:
+    if STATE.identity_patch_num_blocks is not None:
+        return
+    STATE.identity_patch_num_blocks = _runtime_num_blocks()
+
+
+def _runtime_num_blocks() -> int | None:
+    try:
+        from modules import shared
+
+        sd_model = getattr(shared, "sd_model", None)
+        forge_objects = getattr(sd_model, "forge_objects", None)
+        unet = getattr(forge_objects, "unet", None)
+        model = getattr(unet, "model", None)
+        diffusion_model = getattr(model, "diffusion_model", model)
+        blocks = getattr(diffusion_model, "blocks", None)
+        if blocks is None:
+            return None
+        return len(blocks)
+    except Exception:
+        return None
+
+
+def _identity_block_index(call_index: int) -> int | str:
+    num_blocks = STATE.identity_patch_num_blocks
+    if not num_blocks:
+        return "unknown"
+    return call_index % num_blocks
+
+
+def _should_log_identity_call(call_index: int, block_index: int | str) -> bool:
+    if STATE.identity_patch_logged_calls < 8:
+        return True
+    if block_index == 0 and call_index < 256:
+        return True
+    return False
+
+
+def _dtype(value: Any) -> str:
+    dtype = getattr(value, "dtype", None)
+    if dtype is None:
+        return ""
+    return str(dtype)
+
+
+def _device(value: Any) -> str:
+    device = getattr(value, "device", None)
+    if device is None:
+        return ""
+    return str(device)

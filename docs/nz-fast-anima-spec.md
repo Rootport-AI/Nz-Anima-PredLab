@@ -190,6 +190,7 @@ nzfa_mode
 
 - `Off`
 - `Diagnose only`
+- `Identity patch test`
 
 将来追加する実験モード:
 
@@ -205,6 +206,7 @@ nzfa_mode
 
 - `Off`: 明示的に無効。`Enable` が true でも処理しない。
 - `Diagnose only`: 基本情報、timing、attention、cond/uncond、low-bit / compile 関連情報を一括出力する。
+- `Identity patch test`: `backend.nn.anima.Block.forward` を Nz-fast-anima の wrapper 経由に切り替え、元の Forge Neo 実装をそのまま呼び戻す。画像内容を変えず、推論パイプラインの一部を拡張側で捕捉できるかを実機検証する。
 
 高速化実験の優先順位:
 
@@ -470,7 +472,15 @@ avg_step_time = sum(step_durations) / len(step_durations)
 
 ## 12. Patch 仕様
 
-初期バージョンでは patch を行わない。
+初期診断では高速化 patch を行わない。ただし実機検証用に、画像内容を変えない identity patch を許可する。
+
+`Identity patch test` では `backend.nn.anima.Block.forward` を Nz-fast-anima の wrapper に差し替え、wrapper 内で元の `Block.forward` をそのまま呼ぶ。これは高速化ではなく、Forge Neo 本体の推論パイプラインの一部を拡張側から安全に迂回・復帰できるかを確認するための検証である。
+
+検証ログ:
+
+- patch 適用対象と挙動: `target=backend.nn.anima.Block.forward behavior=call_original`
+- 各 call の一部: `identity_patch_call=... route=Nz-fast-anima->original_Block.forward`
+- 生成後 summary: `identity_patch_summary=calls=... shape_mismatches=... errors=... active=True`
 
 将来 patch を行う場合、すべての patch は `patcher.py` で管理する。
 
