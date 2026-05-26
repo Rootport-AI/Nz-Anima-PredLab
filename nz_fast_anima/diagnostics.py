@@ -28,7 +28,10 @@ def log_generation_start(p: Any) -> None:
 
     detection = STATE.model_detection
     proc = processing_info(p)
-    info(f"version={__version__} enabled={STATE.enabled} mode={STATE.mode} status={STATE.status}")
+    info(
+        f"version={__version__} enabled={STATE.enabled} mode={STATE.mode} "
+        f"status={STATE.status} source={STATE.generation_start_source}"
+    )
 
     if isinstance(detection, ModelDetection):
         info(
