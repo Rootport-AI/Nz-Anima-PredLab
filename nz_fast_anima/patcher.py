@@ -5,7 +5,7 @@ from time import perf_counter
 from typing import Any
 
 from .logging import exception, info, warning
-from .state import MODE_IDENTITY_PATCH, STATE
+from .state import MODE_IDENTITY_PATCH, SPARSE_BACKEND_NATTEN, SPARSE_BACKEND_TORCH, STATE
 
 
 @dataclass
@@ -22,6 +22,8 @@ def apply_patch(kind: str, context: Any = None) -> PatchResult:
         return _apply_block_structure_trace_patch()
     if kind == "block_forward_identity":
         return _apply_block_forward_identity_patch()
+    if kind == "sparse_attention":
+        return _apply_sparse_attention_patch()
     warning(f"patch '{kind}' is not implemented in the diagnostic build")
     return PatchResult(False, kind, "not implemented")
 
@@ -331,3 +333,205 @@ def _device(value: Any) -> str:
     if device is None:
         return ""
     return str(device)
+
+
+def _apply_sparse_attention_patch() -> PatchResult:
+    kind = "sparse_attention"
+    if is_patched(kind):
+        return PatchResult(True, kind, "already patched")
+
+    try:
+        from backend.nn import anima
+    except Exception as exc:
+        return PatchResult(False, kind, f"import failed: {exc}")
+
+    block_cls = getattr(anima, "Block", None)
+    attention_cls = getattr(anima, "SelfCrossAttention", None)
+    if block_cls is None or attention_cls is None:
+        return PatchResult(False, kind, "Anima Block/SelfCrossAttention not found")
+
+    original_block_forward = block_cls.forward
+    original_compute_attention = attention_cls.compute_attention
+
+    def sparse_block_forward(self, x_B_T_H_W_D, *args, **kwargs):
+        if not _should_sparse_patch():
+            return original_block_forward(self, x_B_T_H_W_D, *args, **kwargs)
+
+        _ensure_sparse_num_blocks()
+        call_index = STATE.sparse_block_calls
+        STATE.sparse_block_calls += 1
+        block_index = _sparse_block_index(call_index)
+        previous_context = STATE.sparse_current_context
+        STATE.sparse_current_context = _sparse_context(x_B_T_H_W_D, block_index)
+        try:
+            return original_block_forward(self, x_B_T_H_W_D, *args, **kwargs)
+        finally:
+            STATE.sparse_current_context = previous_context
+
+    def sparse_compute_attention(self, q, k, v, transformer_options=None):
+        if not _should_replace_attention(self, q, k, v):
+            return original_compute_attention(
+                self,
+                q,
+                k,
+                v,
+                transformer_options=transformer_options or {},
+            )
+
+        context = STATE.sparse_current_context or {}
+        try:
+            result = _compute_sparse_attention(q, k, v, context)
+            STATE.sparse_attention_calls += 1
+            if STATE.sparse_logged_calls < 8:
+                STATE.sparse_logged_calls += 1
+                info(
+                    "sparse_attention_call="
+                    f"call={STATE.sparse_attention_calls} block={context.get('block_index')} "
+                    f"step={_current_sparse_step()} backend={STATE.sparse_backend} "
+                    f"local_window={STATE.sparse_local_window} dilation={STATE.sparse_dilation} "
+                    f"q_shape={_shape(q)} result_shape={_shape(result)}"
+                )
+            return self.output_dropout(self.output_proj(result))
+        except Exception as exc:
+            STATE.sparse_errors += 1
+            STATE.sparse_fallbacks += 1
+            if STATE.sparse_logged_calls < 8:
+                STATE.sparse_logged_calls += 1
+                warning(
+                    "sparse_attention_fallback="
+                    f"reason={exc} block={context.get('block_index')} backend={STATE.sparse_backend}"
+                )
+            return original_compute_attention(
+                self,
+                q,
+                k,
+                v,
+                transformer_options=transformer_options or {},
+            )
+
+    block_cls.forward = sparse_block_forward
+    attention_cls.compute_attention = sparse_compute_attention
+
+    def restore() -> None:
+        block_cls.forward = original_block_forward
+        attention_cls.compute_attention = original_compute_attention
+
+    STATE.patches[kind] = {"restore": restore}
+    info("applied experimental patch kind=sparse_attention target=Anima self-attention")
+    return PatchResult(True, kind, "applied")
+
+
+def _should_sparse_patch() -> bool:
+    return STATE.active() and STATE.sparse_enabled
+
+
+def _ensure_sparse_num_blocks() -> None:
+    if STATE.sparse_num_blocks is not None:
+        return
+    STATE.sparse_num_blocks = _runtime_num_blocks()
+
+
+def _sparse_block_index(call_index: int) -> int | str:
+    num_blocks = STATE.sparse_num_blocks
+    if not num_blocks:
+        return "unknown"
+    return call_index % num_blocks
+
+
+def _sparse_context(x_B_T_H_W_D: Any, block_index: int | str) -> dict[str, Any] | None:
+    shape = getattr(x_B_T_H_W_D, "shape", None)
+    if shape is None or len(shape) != 5:
+        return None
+    _, t, height, width, _ = shape
+    return {
+        "block_index": block_index,
+        "t": int(t),
+        "height": int(height),
+        "width": int(width),
+    }
+
+
+def _should_replace_attention(attn_module: Any, q: Any, k: Any, v: Any) -> bool:
+    if not _should_sparse_patch():
+        return False
+    if not getattr(attn_module, "is_SelfAttn", False):
+        return False
+    context = STATE.sparse_current_context
+    if not context:
+        return False
+    block_index = context.get("block_index")
+    if not isinstance(block_index, int):
+        return False
+    if not (STATE.sparse_block_start <= block_index <= STATE.sparse_block_end):
+        return False
+    step = _current_sparse_step()
+    if step < STATE.sparse_step_start:
+        return False
+    if STATE.sparse_step_end >= 0 and step > STATE.sparse_step_end:
+        return False
+    interval = STATE.sparse_full_attention_interval
+    if interval > 0 and step % interval == 0:
+        return False
+    if STATE.sparse_backend == SPARSE_BACKEND_NATTEN and not _natten_ready():
+        return False
+    if context.get("t") != 1:
+        STATE.sparse_fallbacks += 1
+        return False
+    if getattr(q, "shape", None) != getattr(k, "shape", None) or getattr(q, "shape", None) != getattr(v, "shape", None):
+        return False
+    return True
+
+
+def _current_sparse_step() -> int:
+    return max(0, STATE.denoiser_calls - 1)
+
+
+def _compute_sparse_attention(q: Any, k: Any, v: Any, context: dict[str, Any]):
+    if STATE.sparse_backend == SPARSE_BACKEND_TORCH:
+        from .sparse import local_attention_2d_torch
+
+        return local_attention_2d_torch(
+            q,
+            k,
+            v,
+            int(context["height"]),
+            int(context["width"]),
+            STATE.sparse_local_window,
+            STATE.sparse_dilation,
+        )
+    if STATE.sparse_backend == SPARSE_BACKEND_NATTEN:
+        from .sparse import local_attention_2d_natten
+
+        message = _natten_unavailable_message()
+        if message:
+            raise RuntimeError(message)
+        return local_attention_2d_natten(
+            q,
+            k,
+            v,
+            int(context["height"]),
+            int(context["width"]),
+            STATE.sparse_local_window,
+            STATE.sparse_dilation,
+        )
+    raise RuntimeError(f"unknown sparse backend: {STATE.sparse_backend}")
+
+
+def _natten_ready() -> bool:
+    message = _natten_unavailable_message()
+    if message:
+        if STATE.sparse_unavailable_reason is None:
+            STATE.sparse_unavailable_reason = message
+            STATE.sparse_fallbacks += 1
+            warning(f"sparse_attention_unavailable backend={STATE.sparse_backend} reason={message}")
+        return False
+    return True
+
+
+def _natten_unavailable_message() -> str:
+    from .sparse import natten_status
+
+    status = natten_status()
+    if not status["available"]:
+        return f"NATTEN unavailable: {status['reason']}"
+    return ""

@@ -15,6 +15,7 @@ from .model_detect import ModelDetection
 from .state import (
     MODE_DIAGNOSE,
     MODE_IDENTITY_PATCH,
+    SPARSE_BACKEND_NATTEN,
     STATE,
 )
 from .timing import timing_summary
@@ -61,8 +62,48 @@ def log_generation_start(p: Any) -> None:
     log_attention_trace()
     log_lowbit_trace()
     log_model_structure_trace()
+    log_experiment_snapshot()
 
     STATE.generation_logged = True
+
+
+def log_experiment_snapshot() -> None:
+    if STATE.sparse_enabled:
+        info(
+            "sparse_config="
+            f"enabled=True backend={STATE.sparse_backend} "
+            f"blocks={STATE.sparse_block_start}..{STATE.sparse_block_end} "
+            f"steps={STATE.sparse_step_start}..{STATE.sparse_step_end} "
+            f"local_window={STATE.sparse_local_window} "
+            f"dilation={STATE.sparse_dilation} "
+            f"full_attention_interval={STATE.sparse_full_attention_interval}"
+        )
+        if STATE.sparse_backend == SPARSE_BACKEND_NATTEN:
+            try:
+                from .sparse import natten_status
+
+                status = natten_status()
+                info(
+                    "natten_status="
+                    f"available={status['available']} version={status['version']} "
+                    f"reason={status['reason']}"
+                )
+            except Exception as exc:
+                warning(f"natten_status_error={exc}")
+    if STATE.cond_uncond_enabled:
+        info(
+            "cond_uncond_config="
+            f"enabled=True skip_cfg1={STATE.cond_uncond_skip_cfg1} "
+            f"schedule={STATE.cond_uncond_schedule_enabled} "
+            f"guidance_interval={STATE.cond_uncond_guidance_interval}"
+        )
+    if STATE.lowbit_enabled or STATE.compile_enabled:
+        info(
+            "lowbit_compile_config="
+            f"lowbit_enabled={STATE.lowbit_enabled} "
+            f"compile_enabled={STATE.compile_enabled} "
+            "reload_note=reload_model_after_changing_reload_required_settings"
+        )
 
 
 def log_attention_trace() -> None:
@@ -129,7 +170,11 @@ def log_cond_trace(params: Any) -> None:
 def log_timing_summary() -> None:
     if not STATE.active():
         return
-    if not STATE.print_timing_log and STATE.mode not in (MODE_DIAGNOSE, MODE_IDENTITY_PATCH):
+    if (
+        not STATE.print_timing_log
+        and STATE.mode not in (MODE_DIAGNOSE, MODE_IDENTITY_PATCH)
+        and not STATE.experimental_active()
+    ):
         return
     data = timing_summary()
     total = data["total_sampling_time"]
@@ -158,6 +203,17 @@ def log_timing_summary() -> None:
             f"errors={STATE.identity_patch_errors} active={active} "
             "target=backend.nn.anima.Block.forward behavior=call_original"
         )
+    if STATE.sparse_enabled:
+        active = _is_patch_active("sparse_attention")
+        info(
+            "sparse_summary="
+            f"block_calls={STATE.sparse_block_calls} "
+            f"attention_calls={STATE.sparse_attention_calls} "
+            f"fallbacks={STATE.sparse_fallbacks} errors={STATE.sparse_errors} "
+            f"num_blocks={STATE.sparse_num_blocks} active={active} "
+            f"backend={STATE.sparse_backend} "
+            f"unavailable_reason={_fmt(STATE.sparse_unavailable_reason)}"
+        )
 
 
 def _seconds(value: float | int | None) -> str:
@@ -173,3 +229,12 @@ def _current_sd_model() -> Any:
         return getattr(shared, "sd_model", None)
     except Exception:
         return None
+
+
+def _is_patch_active(kind: str) -> Any:
+    try:
+        from .patcher import is_patched
+
+        return is_patched(kind)
+    except Exception:
+        return "unknown"
