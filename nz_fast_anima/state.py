@@ -14,9 +14,6 @@ MODE_TRACE_LOWBIT = "Trace low-bit / compile"
 MODES = [
     MODE_OFF,
     MODE_DIAGNOSE,
-    MODE_TRACE_ATTENTION,
-    MODE_TRACE_COND,
-    MODE_TRACE_LOWBIT,
 ]
 
 

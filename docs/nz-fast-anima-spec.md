@@ -190,12 +190,12 @@ nzfa_mode
 
 - `Off`
 - `Diagnose only`
-- `Trace attention`
-- `Trace cond/uncond`
-- `Trace low-bit / compile`
 
 将来追加する実験モード:
 
+- `Trace attention`
+- `Trace cond/uncond`
+- `Trace low-bit / compile`
 - `Fast attention kernel`
 - `Experimental 2D sparse attention`
 - `Cond/uncond optimization`
@@ -204,10 +204,7 @@ nzfa_mode
 動作:
 
 - `Off`: 明示的に無効。`Enable` が true でも処理しない。
-- `Diagnose only`: 基本情報と timing を出力する。
-- `Trace attention`: attention backend と Anima attention 経路を重点的に出力する。
-- `Trace cond/uncond`: CFG、cond/uncond、batching 状態を重点的に出力する。
-- `Trace low-bit / compile`: dtype、Forge operation family、compile/low-bit 関連状態を重点的に出力する。
+- `Diagnose only`: 基本情報、timing、attention、cond/uncond、low-bit / compile 関連情報を一括出力する。
 
 ### 7.3 Logging
 
@@ -560,9 +557,7 @@ README に明記する項目:
 - unsupported model で処理変更が起きない。
 - supported model で model detection evidence を出力できる。
 - `Diagnose only` で total sampling time と average step time を出力できる。
-- `Trace attention` で attention backend を出力できる。
-- `Trace cond/uncond` で uncond presence と CFG 関連情報を出力できる。
-- `Trace low-bit / compile` で dtype / Forge ops 関連情報を出力できる。
+- `Diagnose only` で attention backend、uncond presence、CFG 関連情報、dtype / Forge ops 関連情報を一括出力できる。
 - `Off` ではログ出力と処理変更が止まる。
 - 例外時に WebUI 起動と画像生成を可能な限り止めず、status を `error` または degraded 状態へ移せる。
 

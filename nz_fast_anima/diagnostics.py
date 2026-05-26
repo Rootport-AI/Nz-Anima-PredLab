@@ -8,9 +8,6 @@ from .logging import info, warning
 from .model_detect import ModelDetection
 from .state import (
     MODE_DIAGNOSE,
-    MODE_TRACE_ATTENTION,
-    MODE_TRACE_COND,
-    MODE_TRACE_LOWBIT,
     STATE,
 )
 from .timing import timing_summary
@@ -54,10 +51,8 @@ def log_generation_start(p: Any) -> None:
         f"cfg={proc['cfg_scale']} resolution={proc['width']}x{proc['height']}"
     )
 
-    if STATE.mode == MODE_TRACE_ATTENTION or STATE.verbose_diagnose_log:
-        log_attention_trace()
-    if STATE.mode == MODE_TRACE_LOWBIT or STATE.verbose_diagnose_log:
-        log_lowbit_trace()
+    log_attention_trace()
+    log_lowbit_trace()
 
     STATE.generation_logged = True
 
@@ -89,7 +84,7 @@ def log_lowbit_trace() -> None:
 def log_cond_trace(params: Any) -> None:
     if not STATE.active():
         return
-    if STATE.mode != MODE_TRACE_COND and not STATE.verbose_diagnose_log:
+    if STATE.mode == "Off":
         return
     if STATE.cond_trace_logged and not STATE.verbose_diagnose_log:
         return

@@ -45,16 +45,9 @@ class Script(scripts.Script):
             )
         return [enabled, mode, print_timing_log, verbose_diagnose_log]
 
-    def process(self, p, *script_args):
-        try:
-            _begin_generation(p, script_args, "process", force_restart=False)
-        except Exception as exc:
-            STATE.set_error(f"process failed: {exc}")
-            exception("process failed")
-
     def process_before_every_sampling(self, p, *script_args, **kwargs):
         try:
-            _begin_generation(p, script_args, "process_before_every_sampling", True)
+            _begin_generation(p, script_args, "process_before_every_sampling")
         except Exception as exc:
             STATE.set_error(f"process_before_every_sampling failed: {exc}")
             exception("process_before_every_sampling failed")
@@ -79,11 +72,9 @@ def _apply_ui_args(script_args) -> None:
     STATE.refresh_settings()
 
 
-def _begin_generation(p, script_args, source: str, force_restart: bool) -> None:
+def _begin_generation(p, script_args, source: str) -> None:
     _apply_ui_args(script_args)
     if not STATE.active():
-        return
-    if not force_restart and STATE.generation_logged:
         return
 
     start_sampling(source)
