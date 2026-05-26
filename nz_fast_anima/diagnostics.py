@@ -68,6 +68,13 @@ def log_generation_start(p: Any) -> None:
 
 
 def log_experiment_snapshot() -> None:
+    if STATE.attention_override_active():
+        info(
+            "attention_kernel_config="
+            f"enabled=True backend={STATE.attention_backend} "
+            f"target={STATE.attention_target} "
+            f"blocks={STATE.attention_block_start}..{STATE.attention_block_end}"
+        )
     if STATE.sparse_enabled:
         info(
             "sparse_config="
@@ -213,6 +220,19 @@ def log_timing_summary() -> None:
             f"num_blocks={STATE.sparse_num_blocks} active={active} "
             f"backend={STATE.sparse_backend} "
             f"unavailable_reason={_fmt(STATE.sparse_unavailable_reason)}"
+        )
+    if STATE.attention_override_active():
+        active = _is_patch_active("attention_kernel")
+        info(
+            "attention_kernel_summary="
+            f"calls={STATE.attention_kernel_calls} "
+            f"block_calls={STATE.attention_kernel_block_calls} "
+            f"fallbacks={STATE.attention_kernel_fallbacks} "
+            f"errors={STATE.attention_kernel_errors} "
+            f"num_blocks={STATE.attention_kernel_num_blocks} "
+            f"active={active} backend={STATE.attention_backend} "
+            f"target={STATE.attention_target} "
+            f"blocks={STATE.attention_block_start}..{STATE.attention_block_end}"
         )
 
 

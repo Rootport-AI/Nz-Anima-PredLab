@@ -172,12 +172,12 @@ nzfa_enable
 - `False` の場合、すべての診断、patch、実験処理を無効にする。
 - ただし、拡張ロード時の最小限の初期化と settings 登録は行ってよい。
 
-### 7.2 Mode
+### 7.2 Debug log mode
 
 設定名:
 
 ```text
-Nz-fast-anima mode
+Debug log mode
 ```
 
 永続 key:
@@ -210,7 +210,7 @@ nzfa_mode
 
 ### 7.2.1 高速化実験 UI 方針
 
-高速化実験は、mode dropdown だけで多数の専用 mode を増やすのではなく、AlwaysVisible panel 内にカテゴリ別の操作群として配置する。
+高速化実験は、debug log mode dropdown だけで多数の専用 mode を増やすのではなく、AlwaysVisible panel 内にカテゴリ別の操作群として配置する。
 
 基本原則:
 
@@ -247,6 +247,8 @@ UI:
 - `Forge current/default`
 
 `Forge current/default` は実行環境で検出された本体設定をそのまま使う値である。対象環境では現時点で `attention_sage` と解釈する。
+
+`Attention backend` が `Forge current/default` 以外の場合は、`Debug log mode=Off` でも attention kernel 実験として有効になる。実験時は `attention_kernel_call` と `attention_kernel_summary` をログに出し、Anima の self/cross attention が Nz-fast-anima wrapper 経由で指定 backend を呼んだことを確認できるようにする。
 
 #### 2D sparse attention / NATTEN controls
 
@@ -656,7 +658,7 @@ patch 優先順位:
 以下の場合は処理を変更しない:
 
 - `Enable Nz-fast-anima` が false
-- mode が `Off`
+- `Debug log mode` が `Off` で、すべての実験機能が baseline / disabled
 - model detection が unsupported
 - txt2img 以外
 - img2img / Hires.fix / ControlNet / IP-Adapter / 参照画像系拡張が有効と判断できる
@@ -668,7 +670,7 @@ patch 優先順位:
 - 例外発生
 - 出力 tensor shape が想定と異なる
 - NaN / Inf を検出した場合
-- ユーザーが mode を Off にした場合
+- ユーザーが `Debug log mode` を Off にし、該当する実験機能も baseline / disabled にした場合
 - script unload
 
 例外処理:

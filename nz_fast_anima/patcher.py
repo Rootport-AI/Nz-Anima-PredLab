@@ -5,7 +5,16 @@ from time import perf_counter
 from typing import Any
 
 from .logging import exception, info, warning
-from .state import MODE_IDENTITY_PATCH, SPARSE_BACKEND_NATTEN, SPARSE_BACKEND_TORCH, STATE
+from .state import (
+    ATTENTION_BACKEND_CURRENT,
+    ATTENTION_TARGET_BOTH,
+    ATTENTION_TARGET_CROSS,
+    ATTENTION_TARGET_SELF,
+    MODE_IDENTITY_PATCH,
+    SPARSE_BACKEND_NATTEN,
+    SPARSE_BACKEND_TORCH,
+    STATE,
+)
 
 
 @dataclass
@@ -22,6 +31,8 @@ def apply_patch(kind: str, context: Any = None) -> PatchResult:
         return _apply_block_structure_trace_patch()
     if kind == "block_forward_identity":
         return _apply_block_forward_identity_patch()
+    if kind == "attention_kernel":
+        return _apply_attention_kernel_patch()
     if kind == "sparse_attention":
         return _apply_sparse_attention_patch()
     warning(f"patch '{kind}' is not implemented in the diagnostic build")
@@ -333,6 +344,185 @@ def _device(value: Any) -> str:
     if device is None:
         return ""
     return str(device)
+
+
+def _apply_attention_kernel_patch() -> PatchResult:
+    kind = "attention_kernel"
+    if is_patched(kind):
+        return PatchResult(True, kind, "already patched")
+
+    try:
+        from backend.nn import anima
+    except Exception as exc:
+        return PatchResult(False, kind, f"import failed: {exc}")
+
+    block_cls = getattr(anima, "Block", None)
+    attention_cls = getattr(anima, "SelfCrossAttention", None)
+    if block_cls is None or attention_cls is None:
+        return PatchResult(False, kind, "Anima Block/SelfCrossAttention not found")
+
+    backend_fn = _attention_backend_function(STATE.attention_backend)
+    if backend_fn is None:
+        return PatchResult(False, kind, f"attention backend not found: {STATE.attention_backend}")
+
+    original_block_forward = block_cls.forward
+    original_compute_attention = attention_cls.compute_attention
+
+    def attention_block_forward(self, x_B_T_H_W_D, *args, **kwargs):
+        if not _should_attention_kernel_patch():
+            return original_block_forward(self, x_B_T_H_W_D, *args, **kwargs)
+
+        _ensure_attention_num_blocks()
+        call_index = STATE.attention_kernel_block_calls
+        STATE.attention_kernel_block_calls += 1
+        block_index = _attention_block_index(call_index)
+        previous_context = STATE.attention_kernel_current_context
+        STATE.attention_kernel_current_context = {"block_index": block_index}
+        try:
+            return original_block_forward(self, x_B_T_H_W_D, *args, **kwargs)
+        finally:
+            STATE.attention_kernel_current_context = previous_context
+
+    def attention_compute_attention(self, q, k, v, transformer_options=None):
+        if not _should_replace_attention_kernel(self):
+            return original_compute_attention(
+                self,
+                q,
+                k,
+                v,
+                transformer_options=transformer_options or {},
+            )
+        context = STATE.attention_kernel_current_context or {}
+        try:
+            result = _compute_attention_with_backend(
+                backend_fn,
+                q,
+                k,
+                v,
+                transformer_options=transformer_options or {},
+            )
+            STATE.attention_kernel_calls += 1
+            if STATE.attention_kernel_logged_calls < 12:
+                STATE.attention_kernel_logged_calls += 1
+                attn_type = "self" if getattr(self, "is_SelfAttn", False) else "cross"
+                info(
+                    "attention_kernel_call="
+                    f"call={STATE.attention_kernel_calls} block={context.get('block_index')} "
+                    f"type={attn_type} backend={STATE.attention_backend} "
+                    f"q_shape={_shape(q)} result_shape={_shape(result)}"
+                )
+            return self.output_dropout(self.output_proj(result))
+        except Exception as exc:
+            STATE.attention_kernel_errors += 1
+            STATE.attention_kernel_fallbacks += 1
+            if STATE.attention_kernel_logged_calls < 12:
+                STATE.attention_kernel_logged_calls += 1
+                warning(
+                    "attention_kernel_fallback="
+                    f"reason={exc} block={context.get('block_index')} "
+                    f"backend={STATE.attention_backend}"
+                )
+            return original_compute_attention(
+                self,
+                q,
+                k,
+                v,
+                transformer_options=transformer_options or {},
+            )
+
+    block_cls.forward = attention_block_forward
+    attention_cls.compute_attention = attention_compute_attention
+
+    def restore() -> None:
+        block_cls.forward = original_block_forward
+        attention_cls.compute_attention = original_compute_attention
+
+    STATE.patches[kind] = {"restore": restore}
+    info(
+        "applied experimental patch kind=attention_kernel "
+        f"backend={STATE.attention_backend} target={STATE.attention_target} "
+        f"blocks={STATE.attention_block_start}..{STATE.attention_block_end}"
+    )
+    return PatchResult(True, kind, "applied")
+
+
+def _should_attention_kernel_patch() -> bool:
+    return STATE.active() and STATE.attention_override_active()
+
+
+def _ensure_attention_num_blocks() -> None:
+    if STATE.attention_kernel_num_blocks is not None:
+        return
+    STATE.attention_kernel_num_blocks = _runtime_num_blocks()
+
+
+def _attention_block_index(call_index: int) -> int | str:
+    num_blocks = STATE.attention_kernel_num_blocks
+    if not num_blocks:
+        return "unknown"
+    return call_index % num_blocks
+
+
+def _should_replace_attention_kernel(attn_module: Any) -> bool:
+    if not _should_attention_kernel_patch():
+        return False
+    context = STATE.attention_kernel_current_context
+    if not context:
+        return False
+    block_index = context.get("block_index")
+    if not isinstance(block_index, int):
+        return False
+    if not (STATE.attention_block_start <= block_index <= STATE.attention_block_end):
+        return False
+    is_self = bool(getattr(attn_module, "is_SelfAttn", False))
+    if STATE.attention_target == ATTENTION_TARGET_SELF and not is_self:
+        return False
+    if STATE.attention_target == ATTENTION_TARGET_CROSS and is_self:
+        return False
+    return STATE.attention_target in (ATTENTION_TARGET_BOTH, ATTENTION_TARGET_SELF, ATTENTION_TARGET_CROSS)
+
+
+def _attention_backend_function(name: str) -> Any | None:
+    if name == ATTENTION_BACKEND_CURRENT:
+        return None
+    try:
+        from backend import attention
+    except Exception:
+        return None
+    return getattr(attention, name, None)
+
+
+def _compute_attention_with_backend(backend_fn: Any, q: Any, k: Any, v: Any, transformer_options: dict[str, Any]):
+    from einops import rearrange
+
+    in_q_shape = q.shape
+    in_k_shape = k.shape
+    q_bhsd = rearrange(q, "b ... h d -> b h ... d").view(
+        in_q_shape[0],
+        in_q_shape[-2],
+        -1,
+        in_q_shape[-1],
+    )
+    k_bhsd = rearrange(k, "b ... h d -> b h ... d").view(
+        in_k_shape[0],
+        in_k_shape[-2],
+        -1,
+        in_k_shape[-1],
+    )
+    v_bhsd = rearrange(v, "b ... h d -> b h ... d").view(
+        in_k_shape[0],
+        in_k_shape[-2],
+        -1,
+        in_k_shape[-1],
+    )
+    return backend_fn(
+        q_bhsd,
+        k_bhsd,
+        v_bhsd,
+        in_q_shape[-2],
+        skip_reshape=True,
+        transformer_options=transformer_options,
+    )
 
 
 def _apply_sparse_attention_patch() -> PatchResult:

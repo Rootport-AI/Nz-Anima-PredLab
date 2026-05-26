@@ -26,7 +26,7 @@ def on_ui_settings() -> None:
         "nzfa_mode",
         shared.OptionInfo(
             MODE_OFF,
-            "Nz-fast-anima mode",
+            "Debug log mode",
             component=gr.Dropdown,
             component_args={"choices": MODES},
             section=SECTION,

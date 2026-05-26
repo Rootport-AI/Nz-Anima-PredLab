@@ -41,7 +41,7 @@ class Script(scripts.Script):
                 elem_id="nzfa-enable",
             )
             mode = gr.Dropdown(
-                label="Nz-fast-anima mode",
+                label="Debug log mode",
                 choices=MODES,
                 value=_default_option("nzfa_mode", MODE_OFF),
                 elem_id="nzfa-mode",
@@ -271,6 +271,7 @@ def _begin_generation(p, script_args, source: str) -> None:
 def _configure_generation_patches() -> None:
     if STATE.mode == MODE_IDENTITY_PATCH:
         remove_patch("block_structure_trace")
+        remove_patch("attention_kernel")
         remove_patch("sparse_attention")
         apply_patch("block_forward_identity")
         return
@@ -278,11 +279,22 @@ def _configure_generation_patches() -> None:
     remove_patch("block_forward_identity")
     if STATE.sparse_enabled:
         remove_patch("block_structure_trace")
+        remove_patch("attention_kernel")
         apply_patch("sparse_attention")
     else:
         remove_patch("sparse_attention")
+        if STATE.attention_override_active():
+            remove_patch("block_structure_trace")
+            apply_patch("attention_kernel")
+        else:
+            remove_patch("attention_kernel")
 
-    if STATE.mode == MODE_DIAGNOSE and STATE.verbose_diagnose_log and not STATE.sparse_enabled:
+    if (
+        STATE.mode == MODE_DIAGNOSE
+        and STATE.verbose_diagnose_log
+        and not STATE.sparse_enabled
+        and not STATE.attention_override_active()
+    ):
         apply_patch("block_structure_trace")
     else:
         remove_patch("block_structure_trace")
@@ -291,6 +303,7 @@ def _configure_generation_patches() -> None:
 def _remove_generation_patches() -> None:
     remove_patch("block_structure_trace")
     remove_patch("block_forward_identity")
+    remove_patch("attention_kernel")
     remove_patch("sparse_attention")
 
 

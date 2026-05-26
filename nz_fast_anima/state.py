@@ -84,6 +84,13 @@ class RuntimeState:
     identity_patch_shape_mismatches: int = 0
     identity_patch_errors: int = 0
     identity_patch_num_blocks: int | None = None
+    attention_kernel_calls: int = 0
+    attention_kernel_block_calls: int = 0
+    attention_kernel_fallbacks: int = 0
+    attention_kernel_errors: int = 0
+    attention_kernel_logged_calls: int = 0
+    attention_kernel_num_blocks: int | None = None
+    attention_kernel_current_context: dict[str, Any] | None = None
     sparse_block_calls: int = 0
     sparse_attention_calls: int = 0
     sparse_fallbacks: int = 0
@@ -180,6 +187,7 @@ class RuntimeState:
     def active(self) -> bool:
         return self.enabled and (
             self.mode != MODE_OFF
+            or self.attention_override_active()
             or self.sparse_enabled
             or self.cond_uncond_enabled
             or self.lowbit_enabled
@@ -188,11 +196,15 @@ class RuntimeState:
 
     def experimental_active(self) -> bool:
         return (
-            self.sparse_enabled
+            self.attention_override_active()
+            or self.sparse_enabled
             or self.cond_uncond_enabled
             or self.lowbit_enabled
             or self.compile_enabled
         )
+
+    def attention_override_active(self) -> bool:
+        return self.attention_backend != ATTENTION_BACKEND_CURRENT
 
     def reset_generation(self, source: str = "unknown") -> None:
         self.generation_start = perf_counter()
@@ -210,6 +222,13 @@ class RuntimeState:
         self.identity_patch_shape_mismatches = 0
         self.identity_patch_errors = 0
         self.identity_patch_num_blocks = None
+        self.attention_kernel_calls = 0
+        self.attention_kernel_block_calls = 0
+        self.attention_kernel_fallbacks = 0
+        self.attention_kernel_errors = 0
+        self.attention_kernel_logged_calls = 0
+        self.attention_kernel_num_blocks = None
+        self.attention_kernel_current_context = None
         self.sparse_block_calls = 0
         self.sparse_attention_calls = 0
         self.sparse_fallbacks = 0
@@ -224,6 +243,8 @@ class RuntimeState:
             self.status = "disabled"
         elif self.mode == MODE_IDENTITY_PATCH:
             self.status = "identity-patch"
+        elif self.attention_override_active():
+            self.status = "experimental-attention"
         elif self.sparse_enabled:
             self.status = "experimental-sparse"
         elif self.mode == MODE_OFF:
