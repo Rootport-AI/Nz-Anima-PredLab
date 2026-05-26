@@ -281,6 +281,116 @@ Items that require algorithmic experiments:
 - Whether NATTEN is faster than a simpler dependency-free prototype in this workload.
 - Whether low-bit / compile preserves image quality and improves repeated generation time.
 
+## Runtime Anima block structure trace
+
+Runtime diagnostic logs from StabilityMatrix版 Forge Neo on 2026-05-26 resolved most
+of the remaining structural questions around Anima blocks.
+
+Observed environment:
+
+- Python: `3.13.12`
+- PyTorch: `2.11.0+cu130`
+- GPU: `NVIDIA GeForce RTX 4070 Ti SUPER`
+- Model: `anima_baseV10.safetensors`
+- VAE module: `qwen_image_vae.safetensors`
+- Text encoder module: `qwen_3_06b_base.safetensors`
+- Sampler: `ER SDE`
+- Scheduler: `Beta`
+- Steps: `32`
+- CFG: `4`
+- Resolution: `1536x1536`
+- Attention backend: `attention_sage`
+- Forge operation family: `ForgeOperations`
+- Diffusion model dtype: storage `torch.bfloat16`, computation `torch.bfloat16`
+
+Model structure log:
+
+```text
+model_structure=diffusion_model_class=Anima num_blocks=28 patch_spatial=2 patch_temporal=1 in_channels=16 out_channels=16 block_class=Block self_heads=16 self_head_dim=128 cross_heads=16 cross_head_dim=128
+```
+
+Resolved facts:
+
+- Runtime Anima uses `28` transformer blocks.
+- Block indices are `0..27`.
+- Every traced block has both self-attention and cross-attention.
+- `patch_spatial=2`, `patch_temporal=1`.
+- Latent before patch embedding was observed as `1x16x1x192x192`.
+- Inside `Block.forward()`, the block input was observed as `2x1x96x96x2048`.
+- The first dimension is `2` because CFG cond/uncond are batched together.
+- `T=1`, `H=96`, `W=96`, `D=2048` inside the block.
+- Self-attention uses `16` heads with `head_dim=128`.
+- Cross-attention uses `16` heads with `head_dim=128`.
+
+Self-attention q/k/v trace:
+
+```text
+qkv_trace=block=0 type=self x_shape=2x9216x2048 context_shape= q_shape=2x9216x16x128 k_shape=2x9216x16x128 v_shape=2x9216x16x128 heads=16 head_dim=128
+```
+
+Interpretation:
+
+- Self-attention sequence length is `9216`.
+- `9216 = 1 * 96 * 96`, matching the flattened `T * H * W` latent grid.
+- Self-attention q/k/v all come from the latent grid.
+- This is the natural target for 2D sparse attention.
+
+Cross-attention q/k/v trace:
+
+```text
+qkv_trace=block=0 type=cross x_shape=2x9216x2048 context_shape=2x1x512x1024 q_shape=2x9216x16x128 k_shape=2x1x512x16x128 v_shape=2x1x512x16x128 heads=16 head_dim=128
+```
+
+Interpretation:
+
+- Cross-attention query comes from the latent grid.
+- Cross-attention key/value come from text/context embeddings.
+- The context sequence shape was observed as `2x1x512x1024`.
+- Cross-attention is not a 2D latent-grid attention problem.
+- The first sparse attention experiment should leave cross-attention unchanged.
+
+Block timing trace:
+
+```text
+block_trace=index=0 x_shape=2x1x96x96x2048 elapsed=0.0151s self_attn=True cross_attn=True
+...
+block_trace=index=27 x_shape=2x1x96x96x2048 elapsed=0.0468s self_attn=True cross_attn=True
+```
+
+Timing caveat:
+
+- These per-block elapsed values were captured with Python `perf_counter()`.
+- CUDA execution is asynchronous, so the values are useful only as rough hints.
+- The numbers should not be treated as accurate per-block GPU timings unless CUDA
+  synchronization or CUDA events are added.
+
+2D sparse attention design implication:
+
+- Patch target should be self-attention only.
+- The best structural patch point remains `Block.forward()` or a wrapper that passes
+  `T/H/W` metadata into `SelfCrossAttention`.
+- Patching only `backend.attention.attention_function` is insufficient for 2D sparse
+  attention because the explicit `H/W` layout has already been flattened there.
+- A first algorithmic experiment can start with later blocks, for example `14..27`,
+  but the safe block range cannot be proven from logs alone.
+
+Resolved by lightweight logging:
+
+- Runtime block count.
+- Runtime block index order.
+- Block input shape.
+- q/k/v shapes for self-attention and cross-attention.
+- `crossattn_emb` shape.
+- Runtime heads and head dimension.
+
+Still requires algorithmic experiments:
+
+- Which block range can use sparse self-attention without visible image degradation.
+- Which window size, dilation, or stride preserves quality.
+- Whether sparse self-attention actually beats the existing SageAttention path for
+  this shape.
+- Whether NATTEN or a dependency-free prototype is the better first experiment.
+
 ## Cond/uncond behavior
 
 Relevant source:
