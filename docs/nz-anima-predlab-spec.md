@@ -284,6 +284,12 @@ Preset:
 | `Aggressive` | `0.080` | `0.05` | `0.95` | 速度優先。品質劣化が急増し得るため明示的な実験扱い。 |
 | `Custom` | UI値を保持 | UI値を保持 | UI値を保持 | 個別調整用。 |
 
+UI behavior:
+
+- `TeaCache preset` で `Safe` / `Balanced` / `Aggressive` を選ぶと、`Rel L1 threshold` / `Start progress` / `End progress` はその preset の値へ自動更新する。
+- `Rel L1 threshold` / `Start progress` / `End progress` のいずれかを手動で変更した場合、`TeaCache preset` は自動的に `Custom` へ切り替わる。
+- `Custom` を選んだ場合は既存の slider 値を維持する。
+
 必須動作:
 
 - 生成または batch の最初の model call / sampling step では、利用可能な `previous_residual` が存在しないため、必ず full calculation を行う。
@@ -756,7 +762,7 @@ patch 候補:
 
 2D sparse attention は、flatten 後の generic attention だけでは H/W 情報が失われるため、`Block.forward` または `SelfCrossAttention` 付近で形状情報を扱う方針とする。
 
-TeaCache は `Block.forward` 単体ではなく、Anima diffusion model の block 列全体を囲む patch point を優先する。現行実装では `backend.nn.anima.Anima._forward` を patch point とし、`_forward` が存在しない、`cond_or_uncond` が取得できない、または signature が想定外の場合は元の `Anima._forward` へ fallback し、diagnostic log に `teacache_unavailable_reason` を出す。
+TeaCache は `Block.forward` 単体ではなく、Anima diffusion model の block 列全体を囲む patch point を優先する。現行実装では `backend.nn.anima.Anima._forward` が存在すればそれを patch point とし、Forge Neo のように `_forward` が存在しない環境では `backend.nn.anima.Anima.forward` を patch point とする。`cond_or_uncond` が取得できない、または signature が想定外の場合は元の Anima forward 経路へ fallback し、diagnostic log に `teacache_unavailable_reason` を出す。
 
 TeaCache patch の基本挙動:
 
@@ -771,7 +777,7 @@ TeaCache patch の基本挙動:
 
 patch 優先順位:
 
-1. `Anima._forward` 付近での TeaCache / residual cache 実験。
+1. `Anima._forward` または `Anima.forward` 付近での TeaCache / residual cache 実験。
 2. H/W/T 情報を保持できる `Block.forward` / `SelfCrossAttention` 付近での2D sparse attention実験。
 3. Forge Neoの低bit・compile機能をAnimaへ適用するためのmodel load / operation選択調査。
 4. attention backend差し替え。実測ではSageAttentionが既に使われているため優先度は中から低。
@@ -932,7 +938,7 @@ TeaCache 実験版の完了条件:
 - 2D sparse attention 実験で、NATTEN / Torch prototype の品質・速度・fallback条件を実機で確認する。
 - low-bit / compile 設定ごとに、runtime patch で足りるか model reload が必要かを判定して UI に表示する。
 - NATTEN が対象環境で import / 実行できるか確認する。
-- Forge Neo の Anima 実装で `Anima._forward` TeaCache patch が32 step生成をエラーなく完走し、期待どおり skip できるか確認する。
+- Forge Neo の Anima 実装で `Anima.forward` TeaCache patch が32 step生成をエラーなく完走し、期待どおり skip できるか確認する。
 - 30 step 用 TeaCache 係数を 32 step 実験へ使った場合の品質・skip率・速度を実機で確認し、必要なら32 step用係数を再校正する。
 - TeaCache と attention backend差し替え、2D sparse attention、low-bit / compile を同時に有効化した場合の優先順位を実機で確認する。
 

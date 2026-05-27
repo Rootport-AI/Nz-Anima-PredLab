@@ -5,7 +5,7 @@ import modules.scripts as scripts
 
 from .callbacks import register_callbacks
 from .diagnostics import log_generation_start, log_timing_summary
-from .logging import exception
+from .logging import exception, warning
 from .model_detect import detect_model
 from .patcher import apply_patch, remove_patch
 from .state import (
@@ -24,7 +24,10 @@ from .state import (
     TEACACHE_CACHE_DEVICES,
     TEACACHE_COEFFICIENT_PROFILES,
     TEACACHE_MODULATED_SOURCES,
+    TEACACHE_PRESET_AGGRESSIVE,
     TEACACHE_PRESET_BALANCED,
+    TEACACHE_PRESET_CUSTOM,
+    TEACACHE_PRESET_SAFE,
     TEACACHE_PRESETS,
     TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT,
     TEACACHE_SOURCE_FIRST_BLOCK_SHIFT,
@@ -173,6 +176,25 @@ class Script(scripts.Script):
                     value=False,
                     elem_id="nzap-teacache-verbose-trace",
                 )
+                teacache_preset.change(
+                    fn=_teacache_preset_updates,
+                    inputs=[teacache_preset],
+                    outputs=[
+                        teacache_threshold,
+                        teacache_start_percent,
+                        teacache_end_percent,
+                    ],
+                )
+                for control in (
+                    teacache_threshold,
+                    teacache_start_percent,
+                    teacache_end_percent,
+                ):
+                    control.change(
+                        fn=_teacache_mark_custom,
+                        inputs=[],
+                        outputs=[teacache_preset],
+                    )
             with gr.Accordion("2D Sparse", open=False, elem_id="nzap-sparse-panel"):
                 sparse_enabled = gr.Checkbox(
                     label="Enable 2D sparse attention",
@@ -389,7 +411,10 @@ def _configure_generation_patches() -> None:
         remove_patch("block_structure_trace")
         remove_patch("attention_kernel")
         remove_patch("sparse_attention")
-        apply_patch("teacache")
+        result = apply_patch("teacache")
+        if not result.ok:
+            STATE.teacache_unavailable_reason = result.message
+            warning(f"teacache_patch_unavailable reason={result.message}")
     elif STATE.sparse_enabled:
         remove_patch("teacache")
         remove_patch("block_structure_trace")
@@ -431,3 +456,17 @@ def _default_option(key: str, default):
         return getattr(shared.opts, key, default)
     except Exception:
         return default
+
+
+def _teacache_preset_updates(preset: str):
+    if preset == TEACACHE_PRESET_SAFE:
+        return 0.06, 0.05, 0.95
+    if preset == TEACACHE_PRESET_BALANCED:
+        return 0.07, 0.05, 0.95
+    if preset == TEACACHE_PRESET_AGGRESSIVE:
+        return 0.08, 0.05, 0.95
+    return gr.update(), gr.update(), gr.update()
+
+
+def _teacache_mark_custom():
+    return TEACACHE_PRESET_CUSTOM

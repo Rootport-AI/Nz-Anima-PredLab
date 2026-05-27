@@ -722,26 +722,23 @@ def _apply_teacache_patch() -> PatchResult:
     if anima_cls is None:
         return PatchResult(False, kind, "Anima class not found")
 
-    original_forward = getattr(anima_cls, "_forward", None)
+    target_name = "_forward"
+    original_forward = getattr(anima_cls, target_name, None)
     if original_forward is None or not callable(original_forward):
-        return PatchResult(False, kind, "Anima._forward not found")
+        target_name = "forward"
+        original_forward = getattr(anima_cls, target_name, None)
+    if original_forward is None or not callable(original_forward):
+        return PatchResult(False, kind, "Anima._forward/forward not found")
 
-    def teacache_forward(self, x, timesteps, context, fps=None, padding_mask=None, *extra_args, **kwargs):
+    def teacache_forward(self, x, timesteps, context, *args, **kwargs):
         if not _should_teacache_patch():
-            return _call_original_anima_forward(
-                original_forward,
-                self,
-                x,
-                timesteps,
-                context,
-                fps,
-                padding_mask,
-                extra_args,
+            return original_forward(self, x, timesteps, context, *args, **kwargs)
+        try:
+            fps, padding_mask, body_kwargs = _teacache_parse_forward_args(
+                target_name,
+                args,
                 kwargs,
             )
-        try:
-            if extra_args:
-                raise RuntimeError("Anima._forward extra positional arguments are unsupported by TeaCache")
             return _teacache_forward_body(
                 self,
                 original_forward,
@@ -750,7 +747,7 @@ def _apply_teacache_patch() -> PatchResult:
                 context,
                 fps=fps,
                 padding_mask=padding_mask,
-                **kwargs,
+                **body_kwargs,
             )
         except Exception as exc:
             STATE.teacache_errors += 1
@@ -758,27 +755,18 @@ def _apply_teacache_patch() -> PatchResult:
             STATE.teacache_unavailable_reason = _short_error(exc)
             if STATE.teacache_logged_calls < 12:
                 STATE.teacache_logged_calls += 1
-                warning(f"teacache_fallback=reason={_short_error(exc)} route=original_Anima._forward")
-            return _call_original_anima_forward(
-                original_forward,
-                self,
-                x,
-                timesteps,
-                context,
-                fps,
-                padding_mask,
-                extra_args,
-                kwargs,
-            )
+                warning(f"teacache_fallback=reason={_short_error(exc)} route=original_Anima.{target_name}")
+            return original_forward(self, x, timesteps, context, *args, **kwargs)
 
-    anima_cls._forward = teacache_forward
+    setattr(anima_cls, target_name, teacache_forward)
 
     def restore() -> None:
-        anima_cls._forward = original_forward
+        setattr(anima_cls, target_name, original_forward)
 
     STATE.patches[kind] = {"restore": restore}
     info(
         "applied experimental patch kind=teacache "
+        f"target=backend.nn.anima.Anima.{target_name} "
         f"threshold={STATE.teacache_threshold:.4f} "
         f"progress={STATE.teacache_start_percent:.2f}..{STATE.teacache_end_percent:.2f} "
         f"cache_device={STATE.teacache_cache_device} source={STATE.teacache_modulated_source}"
@@ -786,37 +774,27 @@ def _apply_teacache_patch() -> PatchResult:
     return PatchResult(True, kind, "applied")
 
 
-def _call_original_anima_forward(
-    original_forward: Any,
-    model: Any,
-    x: Any,
-    timesteps: Any,
-    context: Any,
-    fps: Any,
-    padding_mask: Any,
-    extra_args: tuple[Any, ...],
+def _teacache_parse_forward_args(
+    target_name: str,
+    args: tuple[Any, ...],
     kwargs: dict[str, Any],
-):
-    if extra_args:
-        return original_forward(
-            model,
-            x,
-            timesteps,
-            context,
-            fps,
-            padding_mask,
-            *extra_args,
-            **kwargs,
-        )
-    return original_forward(
-        model,
-        x,
-        timesteps,
-        context,
-        fps=fps,
-        padding_mask=padding_mask,
-        **kwargs,
-    )
+) -> tuple[Any, Any, dict[str, Any]]:
+    body_kwargs = dict(kwargs)
+    fps = body_kwargs.pop("fps", None)
+    padding_mask = body_kwargs.pop("padding_mask", None)
+    if target_name == "_forward":
+        if len(args) > 0:
+            fps = args[0]
+        if len(args) > 1:
+            padding_mask = args[1]
+        if len(args) > 2:
+            raise RuntimeError("Anima._forward extra positional arguments are unsupported by TeaCache")
+    else:
+        if len(args) > 0:
+            padding_mask = args[0]
+        if len(args) > 1:
+            raise RuntimeError("Anima.forward extra positional arguments are unsupported by TeaCache")
+    return fps, padding_mask, body_kwargs
 
 
 def _should_teacache_patch() -> bool:
@@ -859,10 +837,11 @@ def _teacache_forward_body(
     timesteps_B_T = timesteps
     crossattn_emb = context
 
-    x_B_T_H_W_D, rope_emb_L_1_1_D, extra_pos_emb = model.prepare_embedded_sequence(
+    x_B_T_H_W_D, rope_emb_L_1_1_D, extra_pos_emb = _teacache_prepare_embedded_sequence(
+        model,
         x_B_C_T_H_W,
-        fps=fps,
-        padding_mask=padding_mask,
+        fps,
+        padding_mask,
     )
 
     if timesteps_B_T.ndim == 1:
@@ -969,6 +948,19 @@ def _ensure_teacache_num_blocks(model: Any) -> None:
         STATE.teacache_num_blocks = len(blocks)
     except Exception:
         STATE.teacache_num_blocks = _runtime_num_blocks()
+
+
+def _teacache_prepare_embedded_sequence(model: Any, x: Any, fps: Any, padding_mask: Any):
+    if fps is not None:
+        try:
+            return model.prepare_embedded_sequence(
+                x,
+                fps=fps,
+                padding_mask=padding_mask,
+            )
+        except TypeError:
+            pass
+    return model.prepare_embedded_sequence(x, padding_mask=padding_mask)
 
 
 def _pad_to_patch_size_5d(x: Any, patch_size: tuple[int, int, int]):

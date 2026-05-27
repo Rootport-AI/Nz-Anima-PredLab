@@ -325,7 +325,7 @@ class RuntimeState:
         if self.teacache_preset == TEACACHE_PRESET_SAFE:
             self.teacache_threshold = 0.06
         elif self.teacache_preset == TEACACHE_PRESET_AGGRESSIVE:
-            self.teacache_threshold = 0.09
+            self.teacache_threshold = 0.08
         else:
             self.teacache_threshold = 0.07
         self.teacache_start_percent = 0.05
