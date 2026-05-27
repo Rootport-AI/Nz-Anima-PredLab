@@ -214,7 +214,7 @@ nzap_mode
 
 基本原則:
 
-- UI は top-level の `Nz-Anima-PredLab` Accordion を1つだけ持つ。その配下に `Attention` / `2D Sparse` / `Cond / Uncond` / `Low-bit / Compile` / `Diagnostics` のサブ Accordion を置く。
+- UI は top-level の `Nz-Anima-PredLab` Accordion を1つだけ持つ。その配下に `Attention` / `TeaCache` / `2D Sparse` / `Cond / Uncond` / `Low-bit / Compile` / `Diagnostics` のサブ Accordion を置く。
 - 他拡張と同じ階層に Nz-Anima-PredLab 用の top-level Accordion を複数作らない。
 - すべての項目の初期状態は Forge Neo 本体の挙動と一致させる。
 - Forge Neo 本体に既に存在する選択肢は、Nz-Anima-PredLab 側でも本体の現在値を初期値として表示する。
@@ -251,6 +251,66 @@ UI:
 `Attention backend` が `Forge current/default` 以外の場合は、`Debug log mode=Off` でも attention kernel 実験として有効になる。実験時は `attention_kernel_call` と `attention_kernel_summary` をログに出す。ログには `requested_backend`、Forge 内部で観測できた `actual_backend`、`internal_fallback`、`actual_backends` を含め、指定 backend 関数が内部で `pytorch_sdpa` に fallback していないかを確認できるようにする。
 
 実機検証では `attention_sage` は `actual_backends=sage:1792`、`internal_fallbacks=0` で最速だった。`attention_flash` は `actual_backends=flash:1792` で動作したが、総生成時間は `attention_sage` より長かった。`attention_xformers` は対象環境で `xformers` 実体が import されておらず、内部で `pytorch_sdpa_fallback` へ落ち、cross attention で shape mismatch を起こしたため unsafe と扱う。`xformers` が実体として利用できない場合は、Nz-Anima-PredLab は `attention_xformers` の実行を避けて元の attention 経路へ戻す。
+
+#### TeaCache / residual cache controls
+
+目的:
+
+- `Anima` の transformer block 列を一部 sampling step で skip し、前回 full calculation 時に保存した residual を再利用することで、30〜35 step の通常生成を維持したまま 1生成あたりの推論時間短縮を狙う。
+- attention kernel そのものを高速化する機能ではなく、DiT block stack の計算頻度を減らす cache management 実験として扱う。
+
+参考実装:
+
+- `daraskme/comfy_anima_tea_cache`
+- `welltop-cn/ComfyUI-TeaCache`
+- `ali-vilab/TeaCache`
+
+UI:
+
+| Control | UI type | Default | Notes |
+| --- | --- | --- | --- |
+| `Enable TeaCache experiment` | checkbox | `False` | Forge Neo 本体に存在しない Nz-Anima-PredLab 実験機能。 |
+| `TeaCache preset` | dropdown / segmented radio | `Balanced` | 候補: `Safe` / `Balanced` / `Aggressive` / `Custom`。preset は下記パラメータの初期値をまとめて選ぶ。 |
+| `Rel L1 threshold` | slider / number | `0.070` | 主要 tradeoff。Anima 30〜32 step では `0.06..0.07` を安全寄りの初期検証範囲とし、`0.08` 以上は品質劣化リスクが高い実験域として扱う。 |
+| `Start percent` | slider | `0.05` | TeaCache 判定を開始する sampling 進行率。32 step ではおおむね step 1〜2 以降に相当する。 |
+| `End percent` | slider | `0.95` | TeaCache 判定を終了する sampling 進行率。終盤の細部を守るため、最後の数 step は full calculation に戻せるようにする。 |
+| `Cache device` | radio | `cuda` | 候補: `cuda` / `cpu`。`cuda` は高速寄りで VRAM を少し使う。`cpu` はVRAM節約用だが転送で遅くなる可能性がある。 |
+| `Modulated source` | dropdown | `first_block_shift` | 候補: `first_block_shift` / `timestep_embedding`。Anima向け既存検証では `first_block_shift` が安定寄り。 |
+| `Coefficient profile` | dropdown | `Anima 2B 30step first_block_shift` | 使用中の多項式係数を明示する。係数未校正の `Identity / uncalibrated` は診断用途のみ。 |
+| `Max skip streak` | slider / number | `0` | `0` は制限なし。初期実装では安全装置として `2` または `3` を選べるようにしてよい。 |
+| `Force full calc interval` | slider / number | `0` | `0` は無効。`N > 0` の場合、N step ごとに必ず full calculation を行う。 |
+| `Dry-run TeaCache decisions only` | checkbox | `False` | 実際には block skip せず、skip/run 判定だけログに出す。初期実装・閾値調整・安全確認用。 |
+| `Verbose TeaCache trace` | checkbox | `False` | step ごとの rel_l1 / accumulated / should_calc / skip/run を出す。通常は summary のみ。 |
+
+Preset:
+
+| Preset | Rel L1 threshold | Start percent | End percent | Notes |
+| --- | ---: | ---: | ---: | --- |
+| `Safe` | `0.060` | `0.05` | `0.95` | 品質優先。速度向上は小さめ。 |
+| `Balanced` | `0.070` | `0.05` | `0.95` | Anima 30 step の既存検証で LPIPS 0.05 付近の境界。初期 default。 |
+| `Aggressive` | `0.080` | `0.05` | `0.95` | 速度優先。品質劣化が急増し得るため明示的な実験扱い。 |
+| `Custom` | UI値を保持 | UI値を保持 | UI値を保持 | 個別調整用。 |
+
+必須動作:
+
+- 生成または batch の最初の model call / sampling step では、利用可能な `previous_residual` が存在しないため、必ず full calculation を行う。
+- `previous_residual` が未初期化、shape mismatch、dtype/device mismatch、NaN/Inf 検出、cond/uncond state 不整合のいずれかを検出した場合も full calculation へ戻す。
+- `Start percent` の条件を満たしていても、初回 step だけは TeaCache skip を許可しない。
+- `Dry-run TeaCache decisions only=True` の場合は、skip 条件を満たしても必ず full calculation を行い、判定結果だけをログに残す。
+- CFG の cond/uncond は原則として別 state に分ける。`cond_or_uncond` が取得できない場合は TeaCache を無効化または full calculation 固定にする。
+- TeaCache state は generation 開始時、model reload、unsupported model、OFF、unload で破棄する。
+
+初期実装で使う係数:
+
+```text
+profile=Anima 2B 30step first_block_shift
+coefficients=[5954.035087553969, -2410.0426539290293, 349.24023850217395, -17.264742642375417, 0.31229336331906893]
+source=first_block_shift
+steps=30
+rmse=0.03206983196972507
+```
+
+32 step で使う場合も初期実験では同 profile を使ってよいが、ログには `profile_steps=30 runtime_steps=32` を出して、厳密には32 step用に再校正されていないことを分かるようにする。
 
 #### 2D sparse attention / NATTEN controls
 
@@ -332,15 +392,19 @@ UI:
 
 高速化実験の優先順位:
 
-1. `Experimental 2D sparse attention`
-2. `Compile / low-bit experiment`
-3. `Fast attention kernel`
-4. `Cond/uncond optimization`
+1. `TeaCache / residual cache experiment`
+2. `Experimental 2D sparse attention`
+3. `Compile / low-bit experiment`
+4. `Fast attention kernel`
+5. `Cond/uncond optimization`
 
 理由:
 
 - 実測では Anima T2I latent は `1x16x1x192x192` で、T=1、H/W=192 の5D latentとして扱える。
 - 実測では attention backend は `attention_sage` で、Anima attention path も有効だった。
+- `attention_sage` / `attention_flash` の差し替え実験では拡張側 wrapper が全 attention call を捕捉できたが、対象環境では `attention_sage` が既に有効で、backend 差し替えによる追加高速化余地は限定的だった。
+- TeaCache は attention kernel の置換ではなく、Anima block 列を step 単位で skip して residual を再利用するため、既存 attention backend と併用できる可能性がある。
+- `daraskme/comfy_anima_tea_cache` の Anima 30 step 検証では、`rel_l1_thresh=0.06..0.07` 付近で品質劣化を抑えつつ約 7〜14% の高速化が観測されている。
 - 実測では CFG>1 の cond/uncond は `cond_or_uncond=[1, 0]`、`input_shape=2x16x1x192x192` として同一 model call に batch されていた。
 - そのため、cond/uncond 最適化は高速化の本命ではない。ただし検証項目として維持する。
 - CFG=1.0、negative prompt空、batch size > 1、複数prompt、特殊拡張併用時の挙動は未検証として残す。
@@ -580,6 +644,46 @@ avg_step_time = sum(step_durations) / len(step_durations)
 - Forge Neo の model load 時 operation 選択を確認する。
 - runtime patch で低bit化すべきか、model reload が必要かを判断する。
 
+### 10.6 TeaCache trace
+
+出力項目:
+
+- TeaCache enabled / dry-run / preset
+- coefficient profile
+- coefficient source
+- runtime steps
+- profile steps
+- start_percent / end_percent
+- cache_device
+- modulated_source
+- rel_l1_thresh
+- total model calls
+- full calculation count
+- skip count
+- skip rate
+- first full calculation count
+- forced full calculation count
+- fallback count
+- cond/uncond state count
+
+Verbose trace でのみ出す項目:
+
+- step index
+- current_percent
+- cond_or_uncond
+- rel_l1
+- estimated distance
+- accumulated distance
+- should_calc
+- reason: `first_step` / `no_previous_residual` / `threshold` / `below_threshold` / `dry_run` / `outside_range` / `force_interval` / `max_skip_streak` / `fallback`
+
+診断目的:
+
+- 初回 step が必ず full calculation になっているか確認する。
+- TeaCache が実際に何 step skip したか確認する。
+- `Dry-run TeaCache decisions only` で画像を変えずに閾値の挙動を確認する。
+- `rel_l1_thresh` の差による skip rate と品質劣化の関係を手動比較できるようにする。
+
 ## 11. Runtime artifacts
 
 初期診断版ではファイル出力を必須にしない。
@@ -642,18 +746,34 @@ is_patched(kind) -> bool
 patch 候補:
 
 - `backend.nn.anima.Block.forward`
+- `backend.nn.anima.Anima._forward`
+- `backend.nn.anima.Anima.forward`
 - `backend.nn.anima.SelfCrossAttention.compute_attention`
 - `backend.nn.anima.SelfCrossAttention.torch_attention_op`
 - `backend.attention.attention_function`
 
 2D sparse attention は、flatten 後の generic attention だけでは H/W 情報が失われるため、`Block.forward` または `SelfCrossAttention` 付近で形状情報を扱う方針とする。
 
+TeaCache は `Block.forward` 単体ではなく、Anima diffusion model の block 列全体を囲む patch point を優先する。Forge Neo の Anima 実装で `_forward` が存在し、`forward()` が wrapper / executor 経由で `_forward` を呼ぶ構造なら、`Anima._forward` を最優先 patch point とする。`_forward` が存在しない、または signature が一致しない場合は TeaCache を有効化せず、diagnostic log に `teacache_unavailable_reason` を出す。
+
+TeaCache patch の基本挙動:
+
+- full calculation 時は、元の Anima block 列を通常通り実行し、`previous_residual = hidden_after_blocks - hidden_before_blocks` を保存する。
+- skip 時は block 列を実行せず、`hidden_before_blocks + previous_residual` を次段へ渡す。
+- final layer / unpatchify / VAE decode は skip しない。
+- cond/uncond が同一 model call に batch される場合でも、cache state と previous_residual は cond/uncond ごとに分離する。
+- generation の最初の model call は必ず full calculation とし、TeaCache skip の候補にしない。
+- `Start percent` 範囲内でも、`previous_residual` がない state では必ず full calculation とする。
+- `Dry-run TeaCache decisions only` では、skip 判定と summary counter は計算するが、実際の block skip は行わない。
+- patch 適用・解除は `patcher.py` の通常 patch 管理に統合し、OFF / unload / unsupported model で必ず復元する。
+
 patch 優先順位:
 
-1. H/W/T 情報を保持できる `Block.forward` / `SelfCrossAttention` 付近での2D sparse attention実験。
-2. Forge Neoの低bit・compile機能をAnimaへ適用するためのmodel load / operation選択調査。
-3. attention backend差し替え。実測ではSageAttentionが既に使われているため優先度は中から低。
-4. cond/uncond最適化。実測で通常CFG>1は同一forward batch化済みのため優先度は低いが、未検証条件の確認項目として維持する。
+1. `Anima._forward` 付近での TeaCache / residual cache 実験。
+2. H/W/T 情報を保持できる `Block.forward` / `SelfCrossAttention` 付近での2D sparse attention実験。
+3. Forge Neoの低bit・compile機能をAnimaへ適用するためのmodel load / operation選択調査。
+4. attention backend差し替え。実測ではSageAttentionが既に使われているため優先度は中から低。
+5. cond/uncond最適化。実測で通常CFG>1は同一forward batch化済みのため優先度は低いが、未検証条件の確認項目として維持する。
 
 ## 13. Safety
 
@@ -666,14 +786,26 @@ patch 優先順位:
 - img2img / Hires.fix / ControlNet / IP-Adapter / 参照画像系拡張が有効と判断できる
 - patch 対象関数が見つからない
 - patch 対象関数の signature が想定と異なる
+- TeaCache で必要な `cond_or_uncond` / sampling step / sigmas / transformer_options が取得できない
 
 以下の場合は patch を解除して fallback する:
 
 - 例外発生
 - 出力 tensor shape が想定と異なる
 - NaN / Inf を検出した場合
+- TeaCache residual の shape / dtype / device が現在の hidden state と一致しない場合
 - ユーザーが `Debug log mode` を Off にし、該当する実験機能も baseline / disabled にした場合
 - script unload
+
+TeaCache 固有の安全条件:
+
+- 初回 step / 初回 state は必ず full calculation にする。利用可能な cache がない状態で skip してはならない。
+- `previous_residual is None` の状態では、`rel_l1_thresh` や `start_percent` に関係なく full calculation にする。
+- `Start percent` より前、または `End percent` より後では full calculation にする。
+- `Max skip streak` が設定されている場合、連続 skip が上限に達した次の候補 step は full calculation にする。
+- `Force full calc interval` が設定されている場合、該当 interval の step は full calculation にする。
+- coefficient profile と runtime steps が一致しない場合はログへ警告を出す。ただし初期実験では `30step` profile を `32step` 実験に使うことは許可する。
+- TeaCache と 2D sparse attention の同時有効化は初期実装では禁止または degraded 扱いとする。両方が有効な場合は TeaCache を無効化するか、明示的な優先順位に従って片方だけ適用する。
 
 例外処理:
 
@@ -720,6 +852,14 @@ Trace low-bit / compile:
 
 ```text
 [Nz-Anima-PredLab] forge_ops=ForgeOperationsInt8 storage_dtype=torch.int8 computation_dtype=torch.bfloat16
+```
+
+TeaCache experiment:
+
+```text
+[Nz-Anima-PredLab] teacache_config=enabled=True preset=Balanced dry_run=False threshold=0.070 start=0.05 end=0.95 cache_device=cuda source=first_block_shift coeff_profile=anima_2b_30step_first_block_shift profile_steps=30 runtime_steps=32
+[Nz-Anima-PredLab] teacache_step=step=0 percent=0.000 decision=full reason=first_step cond_or_uncond=[1,0]
+[Nz-Anima-PredLab] teacache_summary=model_calls=32 full_calcs=28 skips=4 skip_rate=0.125 first_full_calcs=1 forced_full_calcs=0 fallbacks=0 errors=0 active=True
 ```
 
 ## 15. Packaging / compatibility
@@ -769,6 +909,17 @@ README に明記する項目:
 - 品質劣化が視覚的に許容範囲内である。
 - 1step 平均時間が 5% 以上短縮する。
 
+TeaCache 実験版の完了条件:
+
+- `Enable TeaCache experiment=False` で Forge Neo baseline と同等の推論経路になる。
+- `Dry-run TeaCache decisions only=True` で画像内容を変更せず、skip/run 判定だけを summary / verbose trace へ出力できる。
+- generation の最初の model call / sampling step が必ず full calculation として記録される。
+- `previous_residual is None` の state で skip が発生しない。
+- cond/uncond が batch されている場合でも、cache state と previous_residual が cond/uncond ごとに分離される。
+- `teacache_summary` で `full_calcs`、`skips`、`skip_rate`、`fallbacks`、`errors`、`active` を確認できる。
+- `rel_l1_thresh=0.060..0.070`、`start_percent=0.05`、`end_percent=0.95` の範囲で、32 step Anima生成がエラーなく完走する。
+- TeaCache で例外または不整合を検出した場合、full calculation または Forge baseline へfallbackし、WebUIの生成処理を止めない。
+
 ## 17. Open Issues
 
 - Forge Neo の `torch.compile` 実装箇所を特定する。
@@ -777,6 +928,9 @@ README に明記する項目:
 - 2D sparse attention 実験で `Block.forward` から self-attention 実装へ H/W/T 情報を渡す方法を決める。
 - low-bit / compile 設定ごとに、runtime patch で足りるか model reload が必要かを判定して UI に表示する。
 - NATTEN が対象環境で import / 実行できるか確認する。
+- Forge Neo の Anima 実装で `Anima._forward` を TeaCache patch point として安全に差し替えられるか確認する。
+- 30 step 用 TeaCache 係数を 32 step 実験へ使った場合の品質・skip率・速度を実機で確認し、必要なら32 step用係数を再校正する。
+- TeaCache と attention backend差し替え、2D sparse attention、low-bit / compile を同時に有効化した場合の優先順位を実機で確認する。
 
 ## 18. 確定した仕様判断
 
@@ -791,3 +945,12 @@ README に明記する項目:
 - 画質比較は目視確認のみとする。baseline / patched pair の自動保存は初期実装では行わない。
 - UI は top-level の `Nz-Anima-PredLab` Accordion 1つの配下にカテゴリ別サブ Accordion を置く。他拡張と同じ階層に Nz-Anima-PredLab 用 Accordion を複数作らない。
 - low-bit / compile で model reload が必要な設定がある場合、自動 reload は行わない。UI またはログで「設定変更時にはモデルをリロードしてください」と知らせる。
+
+2026-05-27 時点で確定した TeaCache 仕様判断:
+
+- TeaCache は attention kernel 高速化ではなく、Anima block 列を step 単位で skip し、前回 full calculation の residual を再利用する cache management 実験として扱う。
+- UI には `TeaCache` サブ Accordion を追加する。
+- 初期 default preset は `Balanced` とし、`rel_l1_thresh=0.070`、`start_percent=0.05`、`end_percent=0.95`、`cache_device=cuda`、`modulated_source=first_block_shift` とする。
+- 32 step 実験でも `start_percent=0.05` を default としてよい。ただし最初の model call / sampling step は必ず full calculation とし、cache 未初期化状態で skip しない。
+- `Dry-run TeaCache decisions only` を用意し、実装初期は画像を変えずにskip判定を観測できるようにする。
+- 初期実装では TeaCache summary はコンソールログのみとし、JSON / CSV保存は行わない。
