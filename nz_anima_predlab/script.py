@@ -20,6 +20,14 @@ from .state import (
     SPARSE_BACKEND_NATTEN,
     SPARSE_BACKENDS,
     STATE,
+    TEACACHE_CACHE_DEVICE_CUDA,
+    TEACACHE_CACHE_DEVICES,
+    TEACACHE_COEFFICIENT_PROFILES,
+    TEACACHE_MODULATED_SOURCES,
+    TEACACHE_PRESET_BALANCED,
+    TEACACHE_PRESETS,
+    TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT,
+    TEACACHE_SOURCE_FIRST_BLOCK_SHIFT,
 )
 from .timing import start_sampling
 
@@ -84,6 +92,86 @@ class Script(scripts.Script):
                     step=1,
                     value=27,
                     elem_id="nzap-attention-block-end",
+                )
+            with gr.Accordion("TeaCache", open=False, elem_id="nzap-teacache-panel"):
+                teacache_enabled = gr.Checkbox(
+                    label="Enable TeaCache experiment",
+                    value=False,
+                    elem_id="nzap-teacache-enable",
+                )
+                teacache_preset = gr.Dropdown(
+                    label="TeaCache preset",
+                    choices=TEACACHE_PRESETS,
+                    value=TEACACHE_PRESET_BALANCED,
+                    elem_id="nzap-teacache-preset",
+                )
+                teacache_threshold = gr.Slider(
+                    label="Rel L1 threshold",
+                    minimum=0.0,
+                    maximum=0.3,
+                    step=0.005,
+                    value=0.07,
+                    elem_id="nzap-teacache-threshold",
+                )
+                teacache_start_percent = gr.Slider(
+                    label="Start progress",
+                    minimum=0.0,
+                    maximum=1.0,
+                    step=0.01,
+                    value=0.05,
+                    elem_id="nzap-teacache-start-percent",
+                )
+                teacache_end_percent = gr.Slider(
+                    label="End progress",
+                    minimum=0.0,
+                    maximum=1.0,
+                    step=0.01,
+                    value=0.95,
+                    elem_id="nzap-teacache-end-percent",
+                )
+                teacache_cache_device = gr.Radio(
+                    label="Cache device",
+                    choices=TEACACHE_CACHE_DEVICES,
+                    value=TEACACHE_CACHE_DEVICE_CUDA,
+                    elem_id="nzap-teacache-cache-device",
+                )
+                teacache_modulated_source = gr.Dropdown(
+                    label="Modulated source",
+                    choices=TEACACHE_MODULATED_SOURCES,
+                    value=TEACACHE_SOURCE_FIRST_BLOCK_SHIFT,
+                    elem_id="nzap-teacache-modulated-source",
+                )
+                teacache_coefficient_profile = gr.Dropdown(
+                    label="Coefficient profile",
+                    choices=TEACACHE_COEFFICIENT_PROFILES,
+                    value=TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT,
+                    elem_id="nzap-teacache-coefficient-profile",
+                )
+                teacache_max_skip_streak = gr.Slider(
+                    label="Max skip streak (0 = off)",
+                    minimum=0,
+                    maximum=64,
+                    step=1,
+                    value=0,
+                    elem_id="nzap-teacache-max-skip-streak",
+                )
+                teacache_force_full_interval = gr.Slider(
+                    label="Force full interval (0 = off)",
+                    minimum=0,
+                    maximum=64,
+                    step=1,
+                    value=0,
+                    elem_id="nzap-teacache-force-full-interval",
+                )
+                teacache_dry_run = gr.Checkbox(
+                    label="Dry run",
+                    value=False,
+                    elem_id="nzap-teacache-dry-run",
+                )
+                teacache_verbose_trace = gr.Checkbox(
+                    label="Verbose TeaCache trace",
+                    value=False,
+                    elem_id="nzap-teacache-verbose-trace",
                 )
             with gr.Accordion("2D Sparse", open=False, elem_id="nzap-sparse-panel"):
                 sparse_enabled = gr.Checkbox(
@@ -216,6 +304,18 @@ class Script(scripts.Script):
             cond_uncond_guidance_interval,
             lowbit_enabled,
             compile_enabled,
+            teacache_enabled,
+            teacache_preset,
+            teacache_threshold,
+            teacache_start_percent,
+            teacache_end_percent,
+            teacache_cache_device,
+            teacache_modulated_source,
+            teacache_coefficient_profile,
+            teacache_max_skip_streak,
+            teacache_force_full_interval,
+            teacache_dry_run,
+            teacache_verbose_trace,
         ]
 
     def process_before_every_sampling(self, p, *script_args, **kwargs):
@@ -234,6 +334,9 @@ class Script(scripts.Script):
 
 
 def _apply_ui_args(script_args) -> None:
+    if len(script_args) >= 35:
+        STATE.apply_options(*script_args[:35])
+        return
     if len(script_args) >= 23:
         STATE.apply_options(*script_args[:23])
         return
@@ -250,6 +353,10 @@ def _begin_generation(p, script_args, source: str) -> None:
         return
 
     start_sampling(source)
+    try:
+        STATE.generation_steps = int(getattr(p, "steps", 0) or 0) or None
+    except Exception:
+        STATE.generation_steps = None
 
     try:
         from modules import shared
@@ -273,15 +380,23 @@ def _configure_generation_patches() -> None:
         remove_patch("block_structure_trace")
         remove_patch("attention_kernel")
         remove_patch("sparse_attention")
+        remove_patch("teacache")
         apply_patch("block_forward_identity")
         return
 
     remove_patch("block_forward_identity")
-    if STATE.sparse_enabled:
+    if STATE.teacache_enabled:
+        remove_patch("block_structure_trace")
+        remove_patch("attention_kernel")
+        remove_patch("sparse_attention")
+        apply_patch("teacache")
+    elif STATE.sparse_enabled:
+        remove_patch("teacache")
         remove_patch("block_structure_trace")
         remove_patch("attention_kernel")
         apply_patch("sparse_attention")
     else:
+        remove_patch("teacache")
         remove_patch("sparse_attention")
         if STATE.attention_override_active():
             remove_patch("block_structure_trace")
@@ -292,6 +407,7 @@ def _configure_generation_patches() -> None:
     if (
         STATE.mode == MODE_DIAGNOSE
         and STATE.verbose_diagnose_log
+        and not STATE.teacache_enabled
         and not STATE.sparse_enabled
         and not STATE.attention_override_active()
     ):
@@ -305,6 +421,7 @@ def _remove_generation_patches() -> None:
     remove_patch("block_forward_identity")
     remove_patch("attention_kernel")
     remove_patch("sparse_attention")
+    remove_patch("teacache")
 
 
 def _default_option(key: str, default):

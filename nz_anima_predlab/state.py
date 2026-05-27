@@ -40,6 +40,46 @@ ATTENTION_TARGETS = [
     ATTENTION_TARGET_CROSS,
 ]
 
+TEACACHE_PRESET_SAFE = "Safe"
+TEACACHE_PRESET_BALANCED = "Balanced"
+TEACACHE_PRESET_AGGRESSIVE = "Aggressive"
+TEACACHE_PRESET_CUSTOM = "Custom"
+TEACACHE_PRESETS = [
+    TEACACHE_PRESET_SAFE,
+    TEACACHE_PRESET_BALANCED,
+    TEACACHE_PRESET_AGGRESSIVE,
+    TEACACHE_PRESET_CUSTOM,
+]
+
+TEACACHE_CACHE_DEVICE_CUDA = "cuda"
+TEACACHE_CACHE_DEVICE_CPU = "cpu"
+TEACACHE_CACHE_DEVICES = [
+    TEACACHE_CACHE_DEVICE_CUDA,
+    TEACACHE_CACHE_DEVICE_CPU,
+]
+
+TEACACHE_SOURCE_FIRST_BLOCK_SHIFT = "first_block_shift"
+TEACACHE_SOURCE_TIMESTEP_EMBEDDING = "timestep_embedding"
+TEACACHE_MODULATED_SOURCES = [
+    TEACACHE_SOURCE_FIRST_BLOCK_SHIFT,
+    TEACACHE_SOURCE_TIMESTEP_EMBEDDING,
+]
+
+TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT = "Anima 2B 30step first_block_shift"
+TEACACHE_PROFILE_IDENTITY = "Identity estimate"
+TEACACHE_COEFFICIENT_PROFILES = [
+    TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT,
+    TEACACHE_PROFILE_IDENTITY,
+]
+
+TEACACHE_COEFFICIENTS_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT = [
+    5954.035087553969,
+    -2410.0426539290293,
+    349.24023850217395,
+    -17.264742642375417,
+    0.31229336331906893,
+]
+
 
 @dataclass
 class RuntimeState:
@@ -66,10 +106,24 @@ class RuntimeState:
     cond_uncond_guidance_interval: int = 1
     lowbit_enabled: bool = False
     compile_enabled: bool = False
+    teacache_enabled: bool = False
+    teacache_preset: str = TEACACHE_PRESET_BALANCED
+    teacache_threshold: float = 0.07
+    teacache_start_percent: float = 0.05
+    teacache_end_percent: float = 0.95
+    teacache_cache_device: str = TEACACHE_CACHE_DEVICE_CUDA
+    teacache_modulated_source: str = TEACACHE_SOURCE_FIRST_BLOCK_SHIFT
+    teacache_coefficient_profile: str = TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT
+    teacache_max_skip_streak: int = 0
+    teacache_force_full_interval: int = 0
+    teacache_dry_run: bool = False
+    teacache_verbose_trace: bool = False
     status: str = "disabled"
     error_message: str | None = None
     model_detection: Any | None = None
     warned_model_keys: set[str] = field(default_factory=set)
+    generation_index: int = 0
+    generation_steps: int | None = None
     generation_start: float | None = None
     step_start: float | None = None
     step_durations: list[float] = field(default_factory=list)
@@ -103,6 +157,17 @@ class RuntimeState:
     sparse_num_blocks: int | None = None
     sparse_current_context: dict[str, Any] | None = None
     sparse_unavailable_reason: str | None = None
+    teacache_model_calls: int = 0
+    teacache_full_calcs: int = 0
+    teacache_skips: int = 0
+    teacache_dry_run_skips: int = 0
+    teacache_first_full_calcs: int = 0
+    teacache_forced_full_calcs: int = 0
+    teacache_fallbacks: int = 0
+    teacache_errors: int = 0
+    teacache_logged_calls: int = 0
+    teacache_num_blocks: int | None = None
+    teacache_unavailable_reason: str | None = None
     generation_logged: bool = False
     generation_start_source: str | None = None
     patches: dict[str, Any] = field(default_factory=dict)
@@ -149,6 +214,18 @@ class RuntimeState:
         cond_uncond_guidance_interval: int = 1,
         lowbit_enabled: bool = False,
         compile_enabled: bool = False,
+        teacache_enabled: bool = False,
+        teacache_preset: str = TEACACHE_PRESET_BALANCED,
+        teacache_threshold: float = 0.07,
+        teacache_start_percent: float = 0.05,
+        teacache_end_percent: float = 0.95,
+        teacache_cache_device: str = TEACACHE_CACHE_DEVICE_CUDA,
+        teacache_modulated_source: str = TEACACHE_SOURCE_FIRST_BLOCK_SHIFT,
+        teacache_coefficient_profile: str = TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT,
+        teacache_max_skip_streak: int = 0,
+        teacache_force_full_interval: int = 0,
+        teacache_dry_run: bool = False,
+        teacache_verbose_trace: bool = False,
     ) -> None:
         self.enabled = bool(enabled)
         self.mode = mode if mode in MODES else MODE_OFF
@@ -177,6 +254,31 @@ class RuntimeState:
         self.cond_uncond_guidance_interval = _clamp_int(cond_uncond_guidance_interval, 1, 64)
         self.lowbit_enabled = bool(lowbit_enabled)
         self.compile_enabled = bool(compile_enabled)
+        self.teacache_enabled = bool(teacache_enabled)
+        self.teacache_preset = (
+            teacache_preset if teacache_preset in TEACACHE_PRESETS else TEACACHE_PRESET_BALANCED
+        )
+        self.teacache_threshold = _clamp_float(teacache_threshold, 0.0, 0.3)
+        self.teacache_start_percent = _clamp_float(teacache_start_percent, 0.0, 1.0)
+        self.teacache_end_percent = _clamp_float(teacache_end_percent, 0.0, 1.0)
+        self.teacache_cache_device = (
+            teacache_cache_device if teacache_cache_device in TEACACHE_CACHE_DEVICES else TEACACHE_CACHE_DEVICE_CUDA
+        )
+        self.teacache_modulated_source = (
+            teacache_modulated_source
+            if teacache_modulated_source in TEACACHE_MODULATED_SOURCES
+            else TEACACHE_SOURCE_FIRST_BLOCK_SHIFT
+        )
+        self.teacache_coefficient_profile = (
+            teacache_coefficient_profile
+            if teacache_coefficient_profile in TEACACHE_COEFFICIENT_PROFILES
+            else TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT
+        )
+        self.teacache_max_skip_streak = _clamp_int(teacache_max_skip_streak, 0, 64)
+        self.teacache_force_full_interval = _clamp_int(teacache_force_full_interval, 0, 64)
+        self.teacache_dry_run = bool(teacache_dry_run)
+        self.teacache_verbose_trace = bool(teacache_verbose_trace)
+        self._apply_teacache_preset()
         if self.sparse_block_start > self.sparse_block_end:
             self.sparse_block_start, self.sparse_block_end = (
                 self.sparse_block_end,
@@ -187,12 +289,18 @@ class RuntimeState:
                 self.attention_block_end,
                 self.attention_block_start,
             )
+        if self.teacache_start_percent > self.teacache_end_percent:
+            self.teacache_start_percent, self.teacache_end_percent = (
+                self.teacache_end_percent,
+                self.teacache_start_percent,
+            )
 
     def active(self) -> bool:
         return self.enabled and (
             self.mode != MODE_OFF
             or self.attention_override_active()
             or self.sparse_enabled
+            or self.teacache_enabled
             or self.cond_uncond_enabled
             or self.lowbit_enabled
             or self.compile_enabled
@@ -202,6 +310,7 @@ class RuntimeState:
         return (
             self.attention_override_active()
             or self.sparse_enabled
+            or self.teacache_enabled
             or self.cond_uncond_enabled
             or self.lowbit_enabled
             or self.compile_enabled
@@ -210,7 +319,21 @@ class RuntimeState:
     def attention_override_active(self) -> bool:
         return self.attention_backend != ATTENTION_BACKEND_CURRENT
 
+    def _apply_teacache_preset(self) -> None:
+        if self.teacache_preset == TEACACHE_PRESET_CUSTOM:
+            return
+        if self.teacache_preset == TEACACHE_PRESET_SAFE:
+            self.teacache_threshold = 0.06
+        elif self.teacache_preset == TEACACHE_PRESET_AGGRESSIVE:
+            self.teacache_threshold = 0.09
+        else:
+            self.teacache_threshold = 0.07
+        self.teacache_start_percent = 0.05
+        self.teacache_end_percent = 0.95
+
     def reset_generation(self, source: str = "unknown") -> None:
+        self.generation_index += 1
+        self.generation_steps = None
         self.generation_start = perf_counter()
         self.generation_start_source = source
         self.step_start = None
@@ -245,12 +368,25 @@ class RuntimeState:
         self.sparse_num_blocks = None
         self.sparse_current_context = None
         self.sparse_unavailable_reason = None
+        self.teacache_model_calls = 0
+        self.teacache_full_calcs = 0
+        self.teacache_skips = 0
+        self.teacache_dry_run_skips = 0
+        self.teacache_first_full_calcs = 0
+        self.teacache_forced_full_calcs = 0
+        self.teacache_fallbacks = 0
+        self.teacache_errors = 0
+        self.teacache_logged_calls = 0
+        self.teacache_num_blocks = None
+        self.teacache_unavailable_reason = None
         self.generation_logged = False
         self.error_message = None
         if not self.enabled:
             self.status = "disabled"
         elif self.mode == MODE_IDENTITY_PATCH:
             self.status = "identity-patch"
+        elif self.teacache_enabled:
+            self.status = "experimental-teacache"
         elif self.attention_override_active():
             self.status = "experimental-attention"
         elif self.sparse_enabled:
@@ -293,6 +429,14 @@ STATE = RuntimeState()
 def _clamp_int(value: Any, minimum: int, maximum: int) -> int:
     try:
         number = int(value)
+    except Exception:
+        number = minimum
+    return max(minimum, min(maximum, number))
+
+
+def _clamp_float(value: Any, minimum: float, maximum: float) -> float:
+    try:
+        number = float(value)
     except Exception:
         number = minimum
     return max(minimum, min(maximum, number))

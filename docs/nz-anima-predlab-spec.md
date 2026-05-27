@@ -42,7 +42,7 @@
 
 - 拡張は `extensions/Nz-Anima-PredLab/` として実装する。
 - Forge Neo 本体のファイルは変更しない。
-- `Off` の場合は通常推論に影響を与えない。
+- `Off` かつすべての個別 experimental control が baseline / disabled の場合は通常推論に影響を与えない。`Off` でも個別 experimental control が有効な場合は、該当実験を明示 opt-in として実行してよい。
 - 診断モードでは画像生成結果を意図的に変更しない。
 - 高速化実験モードでは推論パイプラインを変更してよいが、画像が生成されること、かつ baseline から視覚的に大きく逸脱しないことを必須条件とする。
 - patch を行う場合は、元関数を保存し、OFF / unload / 例外時に復元できるようにする。
@@ -192,20 +192,12 @@ nzap_mode
 - `Diagnose only`
 - `Identity patch test`
 
-将来追加する実験モード:
-
-- `Trace attention`
-- `Trace cond/uncond`
-- `Trace low-bit / compile`
-- `Experimental 2D sparse attention`
-- `Compile / low-bit experiment`
-- `Fast attention kernel`
-- `Cond/uncond optimization`
+現行実装では、実験機能ごとに mode を増やさず、AlwaysVisible panel 内の個別 control で切り替える。`Trace attention` / `Trace cond/uncond` / `Trace low-bit / compile` / `Experimental 2D sparse attention` / `Compile / low-bit experiment` / `Fast attention kernel` / `Cond/uncond optimization` は旧案または将来検討名であり、`nz_anima_predlab.state.MODES` には含めない。
 
 動作:
 
-- `Off`: 明示的に無効。`Enable` が true でも処理しない。
-- `Diagnose only`: 基本情報、timing、attention、cond/uncond、low-bit / compile 関連情報を一括出力する。
+- `Off`: debug mode としては明示的に無効。ただし、`Attention backend != Forge current/default`、`Enable 2D sparse attention=True` などの個別 experimental control が有効な場合は、`mode=Off` のままでも実験 patch は動作する。
+- `Diagnose only`: 基本情報、timing、attention、low-bit / compile 関連情報を一括出力する。`Verbose diagnose log=True` かつ他の experimental patch が無効な場合は、`block_structure_trace` を適用して Anima block / qkv 構造も観測する。
 - `Identity patch test`: `backend.nn.anima.Block.forward` を Nz-Anima-PredLab の wrapper 経由に切り替え、元の Forge Neo 実装をそのまま呼び戻す。画像内容を変えず、推論パイプラインの一部を拡張側で捕捉できるかを実機検証する。
 
 ### 7.2.1 高速化実験 UI 方針
@@ -214,13 +206,13 @@ nzap_mode
 
 基本原則:
 
-- UI は top-level の `Nz-Anima-PredLab` Accordion を1つだけ持つ。その配下に `Attention` / `TeaCache` / `2D Sparse` / `Cond / Uncond` / `Low-bit / Compile` / `Diagnostics` のサブ Accordion を置く。
+- UI は top-level の `Nz-Anima-PredLab` Accordion を1つだけ持つ。現行実装ではその配下に `Attention` / `TeaCache` / `2D Sparse` / `Cond / Uncond` / `Low-bit / Compile` のサブ Accordion を置く。`Diagnostics` 専用 Accordion は現行実装にはなく、基本項目と `Debug log mode` / `Verbose diagnose log` で診断を制御する。
 - 他拡張と同じ階層に Nz-Anima-PredLab 用の top-level Accordion を複数作らない。
 - すべての項目の初期状態は Forge Neo 本体の挙動と一致させる。
 - Forge Neo 本体に既に存在する選択肢は、Nz-Anima-PredLab 側でも本体の現在値を初期値として表示する。
 - Forge Neo 本体に存在しない実験機能は、必ず `Enable ...` checkbox を持つ。
 - 実験機能の `Enable` は初期値 `False` とする。
-- すべての experimental checkbox が `False` で、既存機能の値が Forge current/default のままなら、推論結果と推論経路は Forge Neo baseline と同等でなければならない。
+- すべての experimental checkbox が `False` で、`Attention backend` が `Forge current/default` のままなら、推論結果と推論経路は Forge Neo baseline と同等でなければならない。
 - UI の選択値は生成開始時に snapshot し、生成中に UI を変更しても進行中の batch へは反映しない。
 - 画像生成に影響する実験が有効な場合は、生成ログへ設定 snapshot を出す。
 
@@ -234,9 +226,10 @@ UI:
 
 | Control | UI type | Default | Notes |
 | --- | --- | --- | --- |
-| `Attention backend` | radio / dropdown | Forge current backend | StabilityMatrix版 Forge Neo 実測では `attention_sage`。起動ログでも `Using SageAttention 2` が確認されている。 |
+| `Attention backend` | dropdown | `Forge current/default` | StabilityMatrix版 Forge Neo 実測では本体の現在値が `attention_sage`。`Forge current/default` 以外を選ぶと attention kernel patch が有効になる。 |
 | `Attention target` | radio | `self + cross` | Forge baseline と一致。実験時のみ `self only` / `cross only` を選べる。 |
-| `Attention block range` | range slider | `0..27` | Forge baseline は全 block 同一 backend。range を絞る場合は実験扱い。 |
+| `Attention block start` | slider | `0` | 現行UIは range slider ではなく start/end の2本の slider。 |
+| `Attention block end` | slider | `27` | Forge baseline は全 block 同一 backend。range を絞る場合は実験扱い。 |
 
 候補値:
 
@@ -324,7 +317,6 @@ UI:
 | --- | --- | --- | --- |
 | `Enable 2D sparse attention` | checkbox | `False` | Forge Neo 本体に存在しない Nz-Anima-PredLab 実験機能。 |
 | `Sparse backend` | radio | `NATTEN (optional)` | `NATTEN` が利用可能なら既定で使う。利用不可の場合は選択不可または degraded 表示にし、`Torch prototype` を検証用 fallback として選べるようにする。 |
-| `Sparse target` | radio | `self attention only` | cross-attention は text/context sequence を使うため初期実験では変更しない。 |
 | `Block start` | slider | `14` | 28 blocks の後半から適用する初期 preset。ユーザーが `0..27` の範囲で調整できる。Enable off では無効。 |
 | `Block end` | slider | `27` | 初期実験 preset。ユーザーが `0..27` の範囲で調整できる。Enable off では無効。 |
 | `Step start` | slider | `0` | 初期値は全 step 対象。 |
@@ -340,7 +332,7 @@ UI:
 - `Local attention window` は full attention の代わりに各 token が見る近傍範囲である。値が大きいほど full attention に近く安全寄り、小さいほど高速化余地が増えるが破綻リスクも上がる。
 - `Sparse backend=NATTEN` は optional dependency とする。NATTEN が import できない場合でも拡張全体は動作し、NATTEN backend だけ degraded / unavailable にする。
 - `Torch prototype` は高速化本命ではなく、NATTEN 由来の問題か sparse algorithm 自体の問題かを切り分けるための検証 backend とする。
-- 最初の algorithmic patch は self-attention のみを対象にする。
+- 現行実装では sparse patch は self-attention のみを対象にする。cross-attention は text/context sequence を使うため変更しない。UI上の `Sparse target` control は未実装で、初期仕様から削除する。
 - `Block.forward` は `x_B_T_H_W_D` を受け取るため、H/W/T を保持できる最も実用的な patch point である。
 
 #### Cond/uncond optimization controls
@@ -354,7 +346,6 @@ UI:
 | Control | UI type | Default | Notes |
 | --- | --- | --- | --- |
 | `Enable cond/uncond optimization` | checkbox | `False` | 通常 CFG>1 は既に同一 model call に batch されているため、低優先度の実験機能。 |
-| `Cond/uncond mode` | radio | `Forge default` | baseline は Forge Neo の `calc_cond_uncond_batch()` に従う。 |
 | `Skip uncond when CFG=1` | checkbox | `False` | Forge 側挙動を確認してから有効化する。 |
 | `Guidance step schedule` | checkbox | `False` | 一部 step だけ CFG 処理を変える実験。 |
 | `Guidance interval` | slider / number | `1` | schedule 有効時のみ使用。 |
@@ -363,6 +354,7 @@ UI:
 
 - 2026-05-26 の実測では CFG>1 の通常生成で `cond_or_uncond=[1, 0]`、`input_shape=2x16x1x192x192` が得られ、cond/uncond は同一 model call に batch されていた。
 - このため cond/uncond 最適化は高速化の本命ではないが、検証項目からは外さない。
+- 現行実装では UI 値の snapshot と設定ログのみ対応しており、`cond_uncond_enabled` に対応する高速化 patch はまだ適用していない。必要時の診断 patch として `cond_batch_trace` は `patcher.py` に存在するが、現行UIフローからは自動適用しない。
 
 #### Low-bit / compile controls
 
@@ -374,21 +366,17 @@ UI:
 
 | Control | UI type | Default | Notes |
 | --- | --- | --- | --- |
-| `Precision / ops mode` | dropdown | Forge current ops | 実測では `ForgeOperations`、storage/computation とも `torch.bfloat16`。 |
-| `Enable Nz low-bit experiment` | checkbox | `False` | Forge current から追加で低bit化する場合のみ有効。 |
-| `Low-bit target` | checkbox group | none | 候補: attention / MLP / all linear / selected blocks。 |
-| `Low-bit format` | radio | 未確定 | 候補: fp8 / int8 / nf4。実装可否確認が必要。 |
-| `Enable torch.compile experiment` | checkbox | `False` | Forge current で compile 未使用なら off が baseline。 |
-| `Compile target` | radio | `none` | 候補: block / self-attention / MLP / full diffusion model。 |
-| `Compile mode` | dropdown | Forge/PyTorch default | 候補: default / reduce-overhead / max-autotune。 |
-| `Warmup runs` | slider / number | `1` | compile 初回コストと2回目以降を分けて測る。 |
+| `Enable Nz low-bit experiment` | checkbox | `False` | 現行実装では設定 snapshot とログのみ。実際の低bit化 patch は未実装。 |
+| `Enable torch.compile experiment` | checkbox | `False` | 現行実装では設定 snapshot とログのみ。実際の compile 適用は未実装。 |
+| Reload note | markdown | - | `Reload the model after changing settings that require model reload.` を表示する。 |
 
 注意:
 
-- model reload が必要な設定と runtime patch で足りる設定を UI 上で区別する。
-- reload 必須項目を変更した場合、生成直前に silent reload しない。UI またはログで「設定変更時にはモデルをリロードしてください」と明示する。
+- 現行UIには `Precision / ops mode`、`Low-bit target`、`Low-bit format`、`Compile target`、`Compile mode`、`Warmup runs` は存在しない。これらは将来候補として扱う。
+- model reload が必要な設定と runtime patch で足りる設定を将来UI上で区別する。
+- reload 必須項目を変更した場合、生成直前に silent reload しない。現行実装では markdown と `lowbit_compile_config` ログで「設定変更時にはモデルをリロードしてください」と明示する。
 - 初期実装では自動 model reload 機能を実装しない。
-- compile は初回生成を遅くする可能性があるため、benchmark では warmup と measured run を分ける。
+- compile 実装を追加する場合、初回生成を遅くする可能性があるため、benchmark では warmup と measured run を分ける。
 
 高速化実験の優先順位:
 
@@ -709,7 +697,7 @@ Verbose trace でのみ出す項目:
 
 ## 12. Patch 仕様
 
-初期診断では高速化 patch を行わない。ただし実機検証用に、画像内容を変えない identity patch を許可する。
+現行実装は診断機能に加えて、実機検証用の `Identity patch test`、attention backend 差し替え、2D sparse attention 実験 patch、TeaCache / residual cache 実験 patch の足場を持つ。
 
 `Identity patch test` では `backend.nn.anima.Block.forward` を Nz-Anima-PredLab の wrapper に差し替え、wrapper 内で元の `Block.forward` をそのまま呼ぶ。これは高速化ではなく、Forge Neo 本体の推論パイプラインの一部を拡張側から安全に迂回・復帰できるかを確認するための検証である。
 
@@ -724,7 +712,7 @@ Verbose trace でのみ出す項目:
 これは `32 * 28 = 896` と一致し、Anima block-level の推論経路を Nz-Anima-PredLab wrapper
 経由に切り替えられることを確認した結果である。
 
-将来 patch を行う場合、すべての patch は `patcher.py` で管理する。
+すべての patch は `patcher.py` で管理する。
 
 必須 API:
 
@@ -752,9 +740,23 @@ patch 候補:
 - `backend.nn.anima.SelfCrossAttention.torch_attention_op`
 - `backend.attention.attention_function`
 
+現行実装済み patch:
+
+- `cond_batch_trace`: `backend.sampling.sampling_function.calc_cond_uncond_batch` の診断 wrapper。現行UIフローからは自動適用しない。
+- `block_structure_trace`: `backend.nn.anima.Block.forward` と `SelfCrossAttention.compute_qkv` の診断 wrapper。`Diagnose only` + `Verbose diagnose log` + 他実験無効時に適用する。
+- `block_forward_identity`: `Identity patch test` 用。`Block.forward` を wrapper 経由にして元実装を呼ぶ。
+- `attention_kernel`: `Block.forward` と `SelfCrossAttention.torch_attention_op` を wrapper し、選択した Forge attention backend を明示実行する。
+- `sparse_attention`: `Block.forward` と `SelfCrossAttention.torch_attention_op` を wrapper し、条件に合う self-attention を 2D sparse attention に置換する。
+
+未実装 patch:
+
+- `lowbit`
+- `compile`
+- `cond_uncond_optimization`
+
 2D sparse attention は、flatten 後の generic attention だけでは H/W 情報が失われるため、`Block.forward` または `SelfCrossAttention` 付近で形状情報を扱う方針とする。
 
-TeaCache は `Block.forward` 単体ではなく、Anima diffusion model の block 列全体を囲む patch point を優先する。Forge Neo の Anima 実装で `_forward` が存在し、`forward()` が wrapper / executor 経由で `_forward` を呼ぶ構造なら、`Anima._forward` を最優先 patch point とする。`_forward` が存在しない、または signature が一致しない場合は TeaCache を有効化せず、diagnostic log に `teacache_unavailable_reason` を出す。
+TeaCache は `Block.forward` 単体ではなく、Anima diffusion model の block 列全体を囲む patch point を優先する。現行実装では `backend.nn.anima.Anima._forward` を patch point とし、`_forward` が存在しない、`cond_or_uncond` が取得できない、または signature が想定外の場合は元の `Anima._forward` へ fallback し、diagnostic log に `teacache_unavailable_reason` を出す。
 
 TeaCache patch の基本挙動:
 
@@ -857,9 +859,9 @@ Trace low-bit / compile:
 TeaCache experiment:
 
 ```text
-[Nz-Anima-PredLab] teacache_config=enabled=True preset=Balanced dry_run=False threshold=0.070 start=0.05 end=0.95 cache_device=cuda source=first_block_shift coeff_profile=anima_2b_30step_first_block_shift profile_steps=30 runtime_steps=32
-[Nz-Anima-PredLab] teacache_step=step=0 percent=0.000 decision=full reason=first_step cond_or_uncond=[1,0]
-[Nz-Anima-PredLab] teacache_summary=model_calls=32 full_calcs=28 skips=4 skip_rate=0.125 first_full_calcs=1 forced_full_calcs=0 fallbacks=0 errors=0 active=True
+[Nz-Anima-PredLab] teacache_config=enabled=True preset=Balanced threshold=0.0700 progress=0.05..0.95 cache_device=cuda source=first_block_shift coefficient_profile=Anima 2B 30step first_block_shift max_skip_streak=0 force_full_interval=0 dry_run=False
+[Nz-Anima-PredLab] teacache_call=call=1 step=0 progress=0.000 decision=full reason=first_call rel_l1=0:None,1:None threshold=0.0700 dry_run=False
+[Nz-Anima-PredLab] teacache_summary=model_calls=32 full_calcs=28 skips=4 dry_run_skips=0 skip_rate=0.125 first_full_calcs=1 forced_full_calcs=0 fallbacks=0 errors=0 num_blocks=28 active=True dry_run=False unavailable_reason=None
 ```
 
 ## 15. Packaging / compatibility
@@ -874,12 +876,13 @@ README に明記する項目:
 - Forge Neo 専用であること。
 - Python / Gradio / Forge Neo の想定系統。
 - インストール手順。
-- 初期版は高速化 patch ではなく診断・計測が目的であること。
+- 現行版は診断・計測を主目的としつつ、実験機能として identity patch、attention backend差し替え、2D sparse attention の patch 足場を含むこと。
+- TeaCache は実験機能として実装済みだが、品質・速度・skip率は環境ごとの実機検証が必要であること。
 - トラブルシュート: 拡張が表示されない、unsupported model になる、ログが出ない、生成が遅くなった場合。
 
 ## 16. Acceptance Criteria
 
-初期診断版の完了条件:
+現行コア機能の完了条件:
 
 - Forge Neo 拡張として読み込まれる。
 - settings に `Enable Nz-Anima-PredLab` が表示される。
@@ -894,7 +897,8 @@ README に明記する項目:
 - `Diagnose only` で attention backend、uncond presence、CFG 関連情報、dtype / Forge ops 関連情報を一括出力できる。
 - `Identity patch test` で `backend.nn.anima.Block.forward` を wrapper 経由に切り替え、元の `Block.forward` を呼び戻せる。
 - `Identity patch test` の summary で `steps * num_blocks` と一致する call count、`shape_mismatches=0`、`errors=0` を確認できる。
-- `Off` ではログ出力と処理変更が止まる。
+- `Off` かつすべての個別 experimental control が baseline / disabled の場合、ログ出力と処理変更が止まる。
+- `mode=Off` でも `Attention backend != Forge current/default` または `Enable 2D sparse attention=True` の場合は、該当 experimental patch が動作し、設定 snapshot と summary を出力できる。
 - 例外時に WebUI 起動と画像生成を可能な限り止めず、status を `error` または degraded 状態へ移せる。
 
 高速化実験版の完了条件:
@@ -925,10 +929,10 @@ TeaCache 実験版の完了条件:
 - Forge Neo の `torch.compile` 実装箇所を特定する。
 - `on_cfg_denoiser()` の呼び出し回数が target sampler ごとに UI steps と一致するか確認する。
 - Anima / Cosmos-Predict2 派生 checkpoint の検出条件を実機で確認する。
-- 2D sparse attention 実験で `Block.forward` から self-attention 実装へ H/W/T 情報を渡す方法を決める。
+- 2D sparse attention 実験で、NATTEN / Torch prototype の品質・速度・fallback条件を実機で確認する。
 - low-bit / compile 設定ごとに、runtime patch で足りるか model reload が必要かを判定して UI に表示する。
 - NATTEN が対象環境で import / 実行できるか確認する。
-- Forge Neo の Anima 実装で `Anima._forward` を TeaCache patch point として安全に差し替えられるか確認する。
+- Forge Neo の Anima 実装で `Anima._forward` TeaCache patch が32 step生成をエラーなく完走し、期待どおり skip できるか確認する。
 - 30 step 用 TeaCache 係数を 32 step 実験へ使った場合の品質・skip率・速度を実機で確認し、必要なら32 step用係数を再校正する。
 - TeaCache と attention backend差し替え、2D sparse attention、low-bit / compile を同時に有効化した場合の優先順位を実機で確認する。
 
@@ -943,13 +947,13 @@ TeaCache 実験版の完了条件:
 - `Torch prototype` は高速化本命ではなく、NATTEN なしでも破綻するかを切り分けるための backend とする。
 - 実験結果はコンソール summary のみで確認する。JSON / CSV 保存は初期実装では行わない。
 - 画質比較は目視確認のみとする。baseline / patched pair の自動保存は初期実装では行わない。
-- UI は top-level の `Nz-Anima-PredLab` Accordion 1つの配下にカテゴリ別サブ Accordion を置く。他拡張と同じ階層に Nz-Anima-PredLab 用 Accordion を複数作らない。
+- 現行UIは top-level の `Nz-Anima-PredLab` Accordion 1つの配下に `Attention` / `2D Sparse` / `Cond / Uncond` / `Low-bit / Compile` のカテゴリ別サブ Accordion を置く。他拡張と同じ階層に Nz-Anima-PredLab 用 Accordion を複数作らない。
 - low-bit / compile で model reload が必要な設定がある場合、自動 reload は行わない。UI またはログで「設定変更時にはモデルをリロードしてください」と知らせる。
 
 2026-05-27 時点で確定した TeaCache 仕様判断:
 
 - TeaCache は attention kernel 高速化ではなく、Anima block 列を step 単位で skip し、前回 full calculation の residual を再利用する cache management 実験として扱う。
-- UI には `TeaCache` サブ Accordion を追加する。
+- TeaCache 実装では `TeaCache` サブ Accordion を追加する。
 - 初期 default preset は `Balanced` とし、`rel_l1_thresh=0.070`、`start_percent=0.05`、`end_percent=0.95`、`cache_device=cuda`、`modulated_source=first_block_shift` とする。
 - 32 step 実験でも `start_percent=0.05` を default としてよい。ただし最初の model call / sampling step は必ず full calculation とし、cache 未初期化状態で skip しない。
 - `Dry-run TeaCache decisions only` を用意し、実装初期は画像を変えずにskip判定を観測できるようにする。

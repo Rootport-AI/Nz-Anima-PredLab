@@ -14,6 +14,11 @@ from .state import (
     SPARSE_BACKEND_NATTEN,
     SPARSE_BACKEND_TORCH,
     STATE,
+    TEACACHE_CACHE_DEVICE_CPU,
+    TEACACHE_COEFFICIENTS_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT,
+    TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT,
+    TEACACHE_PROFILE_IDENTITY,
+    TEACACHE_SOURCE_FIRST_BLOCK_SHIFT,
 )
 
 
@@ -35,6 +40,8 @@ def apply_patch(kind: str, context: Any = None) -> PatchResult:
         return _apply_attention_kernel_patch()
     if kind == "sparse_attention":
         return _apply_sparse_attention_patch()
+    if kind == "teacache":
+        return _apply_teacache_patch()
     warning(f"patch '{kind}' is not implemented in the diagnostic build")
     return PatchResult(False, kind, "not implemented")
 
@@ -699,6 +706,470 @@ def _short_error(exc: Exception) -> str:
     if len(text) > 160:
         return text[:157] + "..."
     return text
+
+
+def _apply_teacache_patch() -> PatchResult:
+    kind = "teacache"
+    if is_patched(kind):
+        return PatchResult(True, kind, "already patched")
+
+    try:
+        from backend.nn import anima
+    except Exception as exc:
+        return PatchResult(False, kind, f"import failed: {exc}")
+
+    anima_cls = getattr(anima, "Anima", None)
+    if anima_cls is None:
+        return PatchResult(False, kind, "Anima class not found")
+
+    original_forward = getattr(anima_cls, "_forward", None)
+    if original_forward is None or not callable(original_forward):
+        return PatchResult(False, kind, "Anima._forward not found")
+
+    def teacache_forward(self, x, timesteps, context, fps=None, padding_mask=None, *extra_args, **kwargs):
+        if not _should_teacache_patch():
+            return _call_original_anima_forward(
+                original_forward,
+                self,
+                x,
+                timesteps,
+                context,
+                fps,
+                padding_mask,
+                extra_args,
+                kwargs,
+            )
+        try:
+            if extra_args:
+                raise RuntimeError("Anima._forward extra positional arguments are unsupported by TeaCache")
+            return _teacache_forward_body(
+                self,
+                original_forward,
+                x,
+                timesteps,
+                context,
+                fps=fps,
+                padding_mask=padding_mask,
+                **kwargs,
+            )
+        except Exception as exc:
+            STATE.teacache_errors += 1
+            STATE.teacache_fallbacks += 1
+            STATE.teacache_unavailable_reason = _short_error(exc)
+            if STATE.teacache_logged_calls < 12:
+                STATE.teacache_logged_calls += 1
+                warning(f"teacache_fallback=reason={_short_error(exc)} route=original_Anima._forward")
+            return _call_original_anima_forward(
+                original_forward,
+                self,
+                x,
+                timesteps,
+                context,
+                fps,
+                padding_mask,
+                extra_args,
+                kwargs,
+            )
+
+    anima_cls._forward = teacache_forward
+
+    def restore() -> None:
+        anima_cls._forward = original_forward
+
+    STATE.patches[kind] = {"restore": restore}
+    info(
+        "applied experimental patch kind=teacache "
+        f"threshold={STATE.teacache_threshold:.4f} "
+        f"progress={STATE.teacache_start_percent:.2f}..{STATE.teacache_end_percent:.2f} "
+        f"cache_device={STATE.teacache_cache_device} source={STATE.teacache_modulated_source}"
+    )
+    return PatchResult(True, kind, "applied")
+
+
+def _call_original_anima_forward(
+    original_forward: Any,
+    model: Any,
+    x: Any,
+    timesteps: Any,
+    context: Any,
+    fps: Any,
+    padding_mask: Any,
+    extra_args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+):
+    if extra_args:
+        return original_forward(
+            model,
+            x,
+            timesteps,
+            context,
+            fps,
+            padding_mask,
+            *extra_args,
+            **kwargs,
+        )
+    return original_forward(
+        model,
+        x,
+        timesteps,
+        context,
+        fps=fps,
+        padding_mask=padding_mask,
+        **kwargs,
+    )
+
+
+def _should_teacache_patch() -> bool:
+    return STATE.active() and STATE.teacache_enabled
+
+
+def _teacache_forward_body(
+    model: Any,
+    original_forward: Any,
+    x: Any,
+    timesteps: Any,
+    context: Any,
+    fps: Any = None,
+    padding_mask: Any = None,
+    **kwargs,
+):
+    import torch
+
+    transformer_options = kwargs.get("transformer_options", {}) or {}
+    unsupported_kwargs = sorted(set(kwargs) - {"transformer_options"})
+    if unsupported_kwargs:
+        raise RuntimeError(f"unsupported Anima._forward kwargs for TeaCache: {unsupported_kwargs}")
+    cond_or_uncond = _teacache_cond_or_uncond(transformer_options.get("cond_or_uncond"))
+    if not cond_or_uncond:
+        raise RuntimeError("transformer_options.cond_or_uncond is missing")
+
+    STATE.teacache_model_calls += 1
+    _ensure_teacache_num_blocks(model)
+
+    orig_shape = list(x.shape)
+    x = _pad_to_patch_size_5d(
+        x,
+        (
+            int(getattr(model, "patch_temporal", 1)),
+            int(getattr(model, "patch_spatial", 1)),
+            int(getattr(model, "patch_spatial", 1)),
+        ),
+    )
+    x_B_C_T_H_W = x
+    timesteps_B_T = timesteps
+    crossattn_emb = context
+
+    x_B_T_H_W_D, rope_emb_L_1_1_D, extra_pos_emb = model.prepare_embedded_sequence(
+        x_B_C_T_H_W,
+        fps=fps,
+        padding_mask=padding_mask,
+    )
+
+    if timesteps_B_T.ndim == 1:
+        timesteps_B_T = timesteps_B_T.unsqueeze(1)
+
+    t_embedding_B_T_D, adaln_lora_B_T_3D = model.t_embedder[1](
+        model.t_embedder[0](timesteps_B_T).to(x_B_T_H_W_D.dtype)
+    )
+    t_embedding_B_T_D = model.t_embedding_norm(t_embedding_B_T_D)
+
+    cache_device = _teacache_cache_device(x_B_T_H_W_D)
+    modulated_inp = _teacache_modulated_input(
+        model,
+        t_embedding_B_T_D,
+        adaln_lora_B_T_3D,
+        cache_device,
+    )
+    cache = _teacache_state_for_model(model)
+    batch_per_slot = _teacache_batch_per_slot(x_B_T_H_W_D, cond_or_uncond)
+    step_index = max(0, STATE.denoiser_calls - 1)
+    progress = _teacache_progress(step_index)
+
+    rels: dict[Any, float | None] = {}
+    slot_should_calc: dict[Any, bool] = {}
+    for slot_index, key in enumerate(cond_or_uncond):
+        key = int(key)
+        item = _teacache_slot(cache, key)
+        modulated_slice = modulated_inp[slot_index * batch_per_slot : (slot_index + 1) * batch_per_slot]
+        rels[key] = _teacache_update_slot(item, modulated_slice)
+        slot_should_calc[key] = bool(item["should_calc"])
+
+    force_full_reason = _teacache_force_full_reason(
+        cache,
+        step_index,
+        progress,
+        cond_or_uncond,
+    )
+    should_calc = force_full_reason is not None or any(slot_should_calc.values())
+    if STATE.teacache_dry_run and not should_calc:
+        STATE.teacache_dry_run_skips += 1
+        should_calc = True
+        force_full_reason = "dry_run"
+
+    block_kwargs = {
+        "rope_emb_L_1_1_D": rope_emb_L_1_1_D.unsqueeze(1).unsqueeze(0),
+        "adaln_lora_B_T_3D": adaln_lora_B_T_3D,
+        "extra_per_block_pos_emb": extra_pos_emb,
+        "transformer_options": transformer_options,
+    }
+
+    if x_B_T_H_W_D.dtype == torch.float16:
+        x_B_T_H_W_D = x_B_T_H_W_D.float()
+
+    if should_calc:
+        ori_x = x_B_T_H_W_D.to(cache_device)
+        for block in model.blocks:
+            x_B_T_H_W_D = block(
+                x_B_T_H_W_D,
+                t_embedding_B_T_D,
+                crossattn_emb,
+                **block_kwargs,
+            )
+        residual = x_B_T_H_W_D.to(cache_device) - ori_x
+        for slot_index, key in enumerate(cond_or_uncond):
+            item = _teacache_slot(cache, int(key))
+            item["previous_residual"] = residual[
+                slot_index * batch_per_slot : (slot_index + 1) * batch_per_slot
+            ]
+            item["accumulated_rel_l1_distance"] = 0.0
+            item["should_calc"] = True
+        cache["skip_streak"] = 0
+        STATE.teacache_full_calcs += 1
+        if STATE.teacache_model_calls == 1:
+            STATE.teacache_first_full_calcs += 1
+        if force_full_reason:
+            STATE.teacache_forced_full_calcs += 1
+        _teacache_log_call("full", step_index, progress, rels, force_full_reason)
+    else:
+        _teacache_apply_residual(
+            x_B_T_H_W_D,
+            cache,
+            cond_or_uncond,
+            batch_per_slot,
+        )
+        cache["skip_streak"] = int(cache.get("skip_streak", 0)) + 1
+        STATE.teacache_skips += 1
+        _teacache_log_call("skip", step_index, progress, rels, None)
+
+    x_B_T_H_W_O = model.final_layer(
+        x_B_T_H_W_D.to(crossattn_emb.dtype),
+        t_embedding_B_T_D,
+        adaln_lora_B_T_3D=adaln_lora_B_T_3D,
+    )
+    return model.unpatchify(x_B_T_H_W_O)[
+        :, :, : orig_shape[-3], : orig_shape[-2], : orig_shape[-1]
+    ]
+
+
+def _ensure_teacache_num_blocks(model: Any) -> None:
+    if STATE.teacache_num_blocks is not None:
+        return
+    blocks = getattr(model, "blocks", None)
+    try:
+        STATE.teacache_num_blocks = len(blocks)
+    except Exception:
+        STATE.teacache_num_blocks = _runtime_num_blocks()
+
+
+def _pad_to_patch_size_5d(x: Any, patch_size: tuple[int, int, int]):
+    import torch.nn.functional as functional
+
+    if len(getattr(x, "shape", ())) != 5:
+        raise RuntimeError(f"expected 5D latent tensor, got shape={_shape(x)}")
+    _, _, t, h, w = x.shape
+    pad_t = (-int(t)) % max(1, int(patch_size[0]))
+    pad_h = (-int(h)) % max(1, int(patch_size[1]))
+    pad_w = (-int(w)) % max(1, int(patch_size[2]))
+    if not (pad_t or pad_h or pad_w):
+        return x
+    return functional.pad(x, (0, pad_w, 0, pad_h, 0, pad_t))
+
+
+def _teacache_cache_device(x: Any):
+    import torch
+
+    if STATE.teacache_cache_device == TEACACHE_CACHE_DEVICE_CPU:
+        return torch.device("cpu")
+    return getattr(x, "device", torch.device("cpu"))
+
+
+def _teacache_modulated_input(model: Any, t_embedding: Any, adaln_lora: Any, cache_device: Any):
+    if STATE.teacache_modulated_source != TEACACHE_SOURCE_FIRST_BLOCK_SHIFT:
+        return t_embedding.to(cache_device)
+    blocks = getattr(model, "blocks", None)
+    if not blocks:
+        raise RuntimeError("Anima blocks are unavailable")
+    first_block = blocks[0]
+    adaln = getattr(first_block, "adaln_modulation_self_attn", None)
+    if not callable(adaln):
+        raise RuntimeError("first block adaln_modulation_self_attn is unavailable")
+    modulated = adaln(t_embedding)
+    if adaln_lora is not None and bool(getattr(model, "use_adaln_lora", False)):
+        modulated = modulated + adaln_lora
+    return modulated.chunk(3, dim=-1)[0].to(cache_device)
+
+
+def _teacache_state_for_model(model: Any) -> dict[str, Any]:
+    cache = getattr(model, "_nzap_teacache_state", None)
+    if not isinstance(cache, dict) or cache.get("generation_index") != STATE.generation_index:
+        cache = {
+            "generation_index": STATE.generation_index,
+            "skip_streak": 0,
+            "slots": {},
+        }
+        setattr(model, "_nzap_teacache_state", cache)
+    return cache
+
+
+def _teacache_slot(cache: dict[str, Any], key: int) -> dict[str, Any]:
+    slots = cache.setdefault("slots", {})
+    if key not in slots:
+        slots[key] = {
+            "should_calc": True,
+            "accumulated_rel_l1_distance": 0.0,
+            "previous_modulated_input": None,
+            "previous_residual": None,
+        }
+    return slots[key]
+
+
+def _teacache_cond_or_uncond(value: Any) -> list[int]:
+    if value is None:
+        return []
+    if hasattr(value, "tolist"):
+        value = value.tolist()
+    try:
+        return [int(item) for item in value]
+    except Exception:
+        return []
+
+
+def _teacache_batch_per_slot(x: Any, cond_or_uncond: Any) -> int:
+    total = int(x.shape[0])
+    slots = len(cond_or_uncond)
+    if slots <= 0 or total % slots != 0:
+        raise RuntimeError(f"invalid cond_or_uncond={cond_or_uncond} for batch={total}")
+    return total // slots
+
+
+def _teacache_update_slot(slot: dict[str, Any], modulated_slice: Any) -> float | None:
+    import math
+
+    previous = slot.get("previous_modulated_input")
+    rel: float | None = None
+    if previous is None:
+        slot["should_calc"] = True
+    else:
+        try:
+            denom = previous.abs().mean()
+            if float(denom.item()) <= 0.0:
+                raise RuntimeError("previous_modulated_input mean is zero")
+            rel_tensor = (modulated_slice - previous).abs().mean() / denom
+            rel = float(rel_tensor.item())
+            if not math.isfinite(rel):
+                raise RuntimeError(f"non-finite TeaCache rel_l1: {rel}")
+            estimate = _teacache_poly1d(rel)
+            if not math.isfinite(estimate) or estimate < 0.0:
+                raise RuntimeError(f"invalid TeaCache estimate: {estimate}")
+            accumulated = float(slot.get("accumulated_rel_l1_distance", 0.0)) + estimate
+            if accumulated < STATE.teacache_threshold:
+                slot["should_calc"] = False
+                slot["accumulated_rel_l1_distance"] = accumulated
+            else:
+                slot["should_calc"] = True
+                slot["accumulated_rel_l1_distance"] = 0.0
+        except Exception:
+            slot["should_calc"] = True
+            slot["accumulated_rel_l1_distance"] = 0.0
+    slot["previous_modulated_input"] = modulated_slice.detach()
+    return rel
+
+
+def _teacache_poly1d(value: float) -> float:
+    coefficients = _teacache_coefficients()
+    result = 0.0
+    for coefficient in coefficients:
+        result = result * value + float(coefficient)
+    return result
+
+
+def _teacache_coefficients() -> list[float]:
+    if STATE.teacache_coefficient_profile == TEACACHE_PROFILE_IDENTITY:
+        return [1.0, 0.0]
+    if STATE.teacache_coefficient_profile == TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT:
+        return TEACACHE_COEFFICIENTS_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT
+    return TEACACHE_COEFFICIENTS_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT
+
+
+def _teacache_progress(step_index: int) -> float:
+    steps = STATE.generation_steps
+    if not steps or steps <= 1:
+        return 0.0
+    return max(0.0, min(1.0, step_index / float(steps - 1)))
+
+
+def _teacache_force_full_reason(
+    cache: dict[str, Any],
+    step_index: int,
+    progress: float,
+    cond_or_uncond: Any,
+) -> str | None:
+    if STATE.teacache_model_calls == 1:
+        return "first_call"
+    for key in cond_or_uncond:
+        if _teacache_slot(cache, int(key)).get("previous_residual") is None:
+            return "missing_residual"
+    if progress < STATE.teacache_start_percent or progress > STATE.teacache_end_percent:
+        return "outside_progress"
+    interval = STATE.teacache_force_full_interval
+    if interval > 0 and step_index > 0 and step_index % interval == 0:
+        return "force_full_interval"
+    max_skip_streak = STATE.teacache_max_skip_streak
+    if max_skip_streak > 0 and int(cache.get("skip_streak", 0)) >= max_skip_streak:
+        return "max_skip_streak"
+    return None
+
+
+def _teacache_apply_residual(
+    x: Any,
+    cache: dict[str, Any],
+    cond_or_uncond: Any,
+    batch_per_slot: int,
+) -> None:
+    for slot_index, key in enumerate(cond_or_uncond):
+        residual = _teacache_slot(cache, int(key)).get("previous_residual")
+        if residual is None:
+            raise RuntimeError(f"missing previous_residual for slot={key}")
+        start = slot_index * batch_per_slot
+        end = (slot_index + 1) * batch_per_slot
+        if getattr(residual, "shape", None) != getattr(x[start:end], "shape", None):
+            raise RuntimeError(
+                f"residual shape mismatch slot={key} residual={_shape(residual)} target={_shape(x[start:end])}"
+            )
+        x[start:end] = x[start:end] + residual.to(x.device)
+
+
+def _teacache_log_call(
+    decision: str,
+    step_index: int,
+    progress: float,
+    rels: dict[Any, float | None],
+    reason: str | None,
+) -> None:
+    if not STATE.teacache_verbose_trace and STATE.teacache_logged_calls >= 12:
+        return
+    STATE.teacache_logged_calls += 1
+    rel_text = ",".join(
+        f"{key}:{'None' if value is None else f'{value:.6f}'}"
+        for key, value in sorted(rels.items())
+    )
+    info(
+        "teacache_call="
+        f"call={STATE.teacache_model_calls} step={step_index} "
+        f"progress={progress:.3f} decision={decision} "
+        f"reason={reason or 'threshold'} rel_l1={rel_text} "
+        f"threshold={STATE.teacache_threshold:.4f} dry_run={STATE.teacache_dry_run}"
+    )
 
 
 def _apply_sparse_attention_patch() -> PatchResult:

@@ -58,6 +58,11 @@ def log_generation_start(p: Any) -> None:
         f"{proc['sampler']} scheduler={proc['scheduler']} steps={proc['steps']} "
         f"cfg={proc['cfg_scale']} resolution={proc['width']}x{proc['height']}"
     )
+    if STATE.generation_steps is None:
+        try:
+            STATE.generation_steps = int(proc["steps"])
+        except Exception:
+            STATE.generation_steps = None
 
     log_attention_trace()
     log_lowbit_trace()
@@ -68,14 +73,14 @@ def log_generation_start(p: Any) -> None:
 
 
 def log_experiment_snapshot() -> None:
-    if STATE.attention_override_active():
+    if STATE.attention_override_active() and not STATE.teacache_enabled and not STATE.sparse_enabled:
         info(
             "attention_kernel_config="
             f"enabled=True backend={STATE.attention_backend} "
             f"target={STATE.attention_target} "
             f"blocks={STATE.attention_block_start}..{STATE.attention_block_end}"
         )
-    if STATE.sparse_enabled:
+    if STATE.sparse_enabled and not STATE.teacache_enabled:
         info(
             "sparse_config="
             f"enabled=True backend={STATE.sparse_backend} "
@@ -97,6 +102,19 @@ def log_experiment_snapshot() -> None:
                 )
             except Exception as exc:
                 warning(f"natten_status_error={exc}")
+    if STATE.teacache_enabled:
+        info(
+            "teacache_config="
+            f"enabled=True preset={STATE.teacache_preset} "
+            f"threshold={STATE.teacache_threshold:.4f} "
+            f"progress={STATE.teacache_start_percent:.2f}..{STATE.teacache_end_percent:.2f} "
+            f"cache_device={STATE.teacache_cache_device} "
+            f"source={STATE.teacache_modulated_source} "
+            f"coefficient_profile={STATE.teacache_coefficient_profile} "
+            f"max_skip_streak={STATE.teacache_max_skip_streak} "
+            f"force_full_interval={STATE.teacache_force_full_interval} "
+            f"dry_run={STATE.teacache_dry_run}"
+        )
     if STATE.cond_uncond_enabled:
         info(
             "cond_uncond_config="
@@ -210,7 +228,7 @@ def log_timing_summary() -> None:
             f"errors={STATE.identity_patch_errors} active={active} "
             "target=backend.nn.anima.Block.forward behavior=call_original"
         )
-    if STATE.sparse_enabled:
+    if STATE.sparse_enabled and not STATE.teacache_enabled:
         active = _is_patch_active("sparse_attention")
         info(
             "sparse_summary="
@@ -221,7 +239,7 @@ def log_timing_summary() -> None:
             f"backend={STATE.sparse_backend} "
             f"unavailable_reason={_fmt(STATE.sparse_unavailable_reason)}"
         )
-    if STATE.attention_override_active():
+    if STATE.attention_override_active() and not STATE.teacache_enabled and not STATE.sparse_enabled:
         active = _is_patch_active("attention_kernel")
         info(
             "attention_kernel_summary="
@@ -236,6 +254,30 @@ def log_timing_summary() -> None:
             f"active={active} backend={STATE.attention_backend} "
             f"target={STATE.attention_target} "
             f"blocks={STATE.attention_block_start}..{STATE.attention_block_end}"
+        )
+    if STATE.teacache_enabled:
+        active = _is_patch_active("teacache")
+        total_decisions = STATE.teacache_full_calcs + STATE.teacache_skips
+        skip_rate = (
+            STATE.teacache_skips / total_decisions
+            if total_decisions
+            else 0.0
+        )
+        info(
+            "teacache_summary="
+            f"model_calls={STATE.teacache_model_calls} "
+            f"full_calcs={STATE.teacache_full_calcs} "
+            f"skips={STATE.teacache_skips} "
+            f"dry_run_skips={STATE.teacache_dry_run_skips} "
+            f"skip_rate={skip_rate:.3f} "
+            f"first_full_calcs={STATE.teacache_first_full_calcs} "
+            f"forced_full_calcs={STATE.teacache_forced_full_calcs} "
+            f"fallbacks={STATE.teacache_fallbacks} "
+            f"errors={STATE.teacache_errors} "
+            f"num_blocks={STATE.teacache_num_blocks} "
+            f"active={active} "
+            f"dry_run={STATE.teacache_dry_run} "
+            f"unavailable_reason={_fmt(STATE.teacache_unavailable_reason)}"
         )
 
 
