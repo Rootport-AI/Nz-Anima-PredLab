@@ -272,7 +272,7 @@ def _apply_block_forward_identity_patch() -> PatchResult:
                 f"input_shape={_shape(x_B_T_H_W_D)} output_shape={_shape(output)} "
                 f"same_shape={same_shape} input_dtype={_dtype(x_B_T_H_W_D)} "
                 f"output_dtype={_dtype(output)} device={_device(output)} "
-                "route=Nz-fast-anima->original_Block.forward"
+                "route=Nz-Anima-PredLab->original_Block.forward"
             )
 
         return output

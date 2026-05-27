@@ -1,19 +1,19 @@
-# Nz-fast-anima
+# Nz-Anima-PredLab
 
-Nz-fast-anima is a Forge Neo extension for investigating and eventually speeding up Anima / Cosmos-Predict2 T2I inference.
+Nz-Anima-PredLab is a Forge Neo extension for investigating and eventually speeding up Anima / Cosmos-Predict2 T2I inference.
 
 The current build is diagnostic only. It does not patch Forge Neo's inference pipeline yet.
 
 ## Current Features
 
-- Forge Neo settings under `Settings > Nz-fast-anima`
+- Forge Neo settings under `Settings > Nz-Anima-PredLab`
 - Anima / Cosmos-Predict2 model detection
 - Sampling timing logs
 - Attention backend trace
 - CFG cond/uncond trace
 - Low-bit / dtype / Forge operations trace
 
-Logs are printed to the StabilityMatrix / Forge Neo console with the `[Nz-fast-anima]` prefix.
+Logs are printed to the StabilityMatrix / Forge Neo console with the `[Nz-Anima-PredLab]` prefix.
 
 ## Compatibility
 

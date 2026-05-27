@@ -1,14 +1,14 @@
-# Nz-fast-anima 仕様書 v0.1.1
+# Nz-Anima-PredLab 仕様書 v0.1.1
 
 ## 1. 目的
 
-`Nz-fast-anima` は、Forge Neo 上で Anima / Cosmos-Predict2 系 T2I モデルの推論パイプラインを観測し、将来的な高速化実験を安全に切り替えられるようにする拡張機能である。
+`Nz-Anima-PredLab` は、Forge Neo 上で Anima / Cosmos-Predict2 系 T2I モデルの推論パイプラインを観測し、将来的な高速化実験を安全に切り替えられるようにする拡張機能である。
 
 初期実装では高速化 patch を行わず、Forge Neo の既存実装を壊さない診断・計測機能を優先する。高速化実験を追加する場合も、対象モデル、対象モード、復元処理、fallback 条件を明示して実装する。
 
 関連文書:
 
-- `Nz-fast-anima 要件定義 v0.1.1.txt`
+- `Nz-Anima-PredLab 要件定義 v0.1.1.txt`
 - `docs/forge-neo-research.md`
 
 参考にした Forge Neo 拡張:
@@ -40,14 +40,14 @@
 
 ## 3. 基本方針
 
-- 拡張は `extensions/Nz-fast-anima/` として実装する。
+- 拡張は `extensions/Nz-Anima-PredLab/` として実装する。
 - Forge Neo 本体のファイルは変更しない。
 - `Off` の場合は通常推論に影響を与えない。
 - 診断モードでは画像生成結果を意図的に変更しない。
 - 高速化実験モードでは推論パイプラインを変更してよいが、画像が生成されること、かつ baseline から視覚的に大きく逸脱しないことを必須条件とする。
 - patch を行う場合は、元関数を保存し、OFF / unload / 例外時に復元できるようにする。
 - 拡張 import 時には重い処理をしない。torch / Forge backend の深い参照、モデル検査、GPU 処理は callback または生成時へ遅延する。
-- 設定キー、API path、ログ prefix、HTML element id はすべて `nzfa` / `Nz-fast-anima` 名前空間に閉じる。
+- 設定キー、API path、ログ prefix、HTML element id はすべて `nzap` / `Nz-Anima-PredLab` 名前空間に閉じる。
 - 外部ネットワークアクセスは行わない。将来必要になった場合も明示的な opt-in 設定を必須とする。
 
 ## 4. 参考拡張から採用する作法
@@ -59,12 +59,12 @@
 想定:
 
 ```python
-from nz_fast_anima.script import Script
+from nz_anima_predlab.script import Script
 
 __all__ = ["Script"]
 ```
 
-本体実装、callback 登録、状態管理は `nz_fast_anima/` package 側へ置く。
+本体実装、callback 登録、状態管理は `nz_anima_predlab/` package 側へ置く。
 
 ### 4.2 起動と reload
 
@@ -75,9 +75,9 @@ __all__ = ["Script"]
 
 ### 4.3 UI / settings
 
-- Settings タブには `("nz_fast_anima", "Nz-fast-anima")` section を作る。
+- Settings タブには `("nz_anima_predlab", "Nz-Anima-PredLab")` section を作る。
 - `shared.opts.add_option()` と `shared.OptionInfo` を使う。
-- UI 内の element id は `nzfa-*` で統一する。
+- UI 内の element id は `nzap-*` で統一する。
 - 生成タブの UI は `scripts.AlwaysVisible` の折りたたみ panel とし、初期状態では邪魔にならないよう閉じる。
 - 生成ごとに変える項目は AlwaysVisible UI、永続項目は Settings タブへ置く。
 
@@ -92,10 +92,10 @@ __all__ = ["Script"]
 想定構成:
 
 ```text
-Nz-fast-anima/
+Nz-Anima-PredLab/
 ├── scripts/
-│   └── nz_fast_anima.py
-├── nz_fast_anima/
+│   └── nz_anima_predlab.py
+├── nz_anima_predlab/
 │   ├── __init__.py
 │   ├── script.py
 │   ├── callbacks.py
@@ -111,7 +111,7 @@ Nz-fast-anima/
 │   └── lowbit.py
 ├── docs/
 │   ├── forge-neo-research.md
-│   └── nz-fast-anima-spec.md
+│   └── nz-anima-predlab-spec.md
 ├── README.md
 ├── CHANGELOG.md
 └── LICENSE
@@ -139,24 +139,24 @@ callback 登録:
 - `register_callbacks()` は idempotent にする。
 - `on_script_unloaded` では patch 解除と runtime state の掃除を行う。
 
-将来 UI から詳細 status を取得する必要が出た場合のみ、FastAPI endpoint を追加する。追加する場合の path は `/nzfaapi/v1/...` とし、初期診断版では必須にしない。
+将来 UI から詳細 status を取得する必要が出た場合のみ、FastAPI endpoint を追加する。追加する場合の path は `/nzapapi/v1/...` とし、初期診断版では必須にしない。
 
 ## 7. 設定項目
 
-すべての永続設定キーは `nzfa_*` prefix を使う。
+すべての永続設定キーは `nzap_*` prefix を使う。
 
 ### 7.1 Enable
 
 設定名:
 
 ```text
-Enable Nz-fast-anima
+Enable Nz-Anima-PredLab
 ```
 
 永続 key:
 
 ```text
-nzfa_enable
+nzap_enable
 ```
 
 型:
@@ -183,7 +183,7 @@ Debug log mode
 永続 key:
 
 ```text
-nzfa_mode
+nzap_mode
 ```
 
 初期選択肢:
@@ -206,7 +206,7 @@ nzfa_mode
 
 - `Off`: 明示的に無効。`Enable` が true でも処理しない。
 - `Diagnose only`: 基本情報、timing、attention、cond/uncond、low-bit / compile 関連情報を一括出力する。
-- `Identity patch test`: `backend.nn.anima.Block.forward` を Nz-fast-anima の wrapper 経由に切り替え、元の Forge Neo 実装をそのまま呼び戻す。画像内容を変えず、推論パイプラインの一部を拡張側で捕捉できるかを実機検証する。
+- `Identity patch test`: `backend.nn.anima.Block.forward` を Nz-Anima-PredLab の wrapper 経由に切り替え、元の Forge Neo 実装をそのまま呼び戻す。画像内容を変えず、推論パイプラインの一部を拡張側で捕捉できるかを実機検証する。
 
 ### 7.2.1 高速化実験 UI 方針
 
@@ -214,10 +214,10 @@ nzfa_mode
 
 基本原則:
 
-- UI は top-level の `Nz-fast-anima` Accordion を1つだけ持つ。その配下に `Attention` / `2D Sparse` / `Cond / Uncond` / `Low-bit / Compile` / `Diagnostics` のサブ Accordion を置く。
-- 他拡張と同じ階層に Nz-fast-anima 用の top-level Accordion を複数作らない。
+- UI は top-level の `Nz-Anima-PredLab` Accordion を1つだけ持つ。その配下に `Attention` / `2D Sparse` / `Cond / Uncond` / `Low-bit / Compile` / `Diagnostics` のサブ Accordion を置く。
+- 他拡張と同じ階層に Nz-Anima-PredLab 用の top-level Accordion を複数作らない。
 - すべての項目の初期状態は Forge Neo 本体の挙動と一致させる。
-- Forge Neo 本体に既に存在する選択肢は、Nz-fast-anima 側でも本体の現在値を初期値として表示する。
+- Forge Neo 本体に既に存在する選択肢は、Nz-Anima-PredLab 側でも本体の現在値を初期値として表示する。
 - Forge Neo 本体に存在しない実験機能は、必ず `Enable ...` checkbox を持つ。
 - 実験機能の `Enable` は初期値 `False` とする。
 - すべての experimental checkbox が `False` で、既存機能の値が Forge current/default のままなら、推論結果と推論経路は Forge Neo baseline と同等でなければならない。
@@ -250,7 +250,7 @@ UI:
 
 `Attention backend` が `Forge current/default` 以外の場合は、`Debug log mode=Off` でも attention kernel 実験として有効になる。実験時は `attention_kernel_call` と `attention_kernel_summary` をログに出す。ログには `requested_backend`、Forge 内部で観測できた `actual_backend`、`internal_fallback`、`actual_backends` を含め、指定 backend 関数が内部で `pytorch_sdpa` に fallback していないかを確認できるようにする。
 
-実機検証では `attention_sage` は `actual_backends=sage:1792`、`internal_fallbacks=0` で最速だった。`attention_flash` は `actual_backends=flash:1792` で動作したが、総生成時間は `attention_sage` より長かった。`attention_xformers` は対象環境で `xformers` 実体が import されておらず、内部で `pytorch_sdpa_fallback` へ落ち、cross attention で shape mismatch を起こしたため unsafe と扱う。`xformers` が実体として利用できない場合は、Nz-fast-anima は `attention_xformers` の実行を避けて元の attention 経路へ戻す。
+実機検証では `attention_sage` は `actual_backends=sage:1792`、`internal_fallbacks=0` で最速だった。`attention_flash` は `actual_backends=flash:1792` で動作したが、総生成時間は `attention_sage` より長かった。`attention_xformers` は対象環境で `xformers` 実体が import されておらず、内部で `pytorch_sdpa_fallback` へ落ち、cross attention で shape mismatch を起こしたため unsafe と扱う。`xformers` が実体として利用できない場合は、Nz-Anima-PredLab は `attention_xformers` の実行を避けて元の attention 経路へ戻す。
 
 #### 2D sparse attention / NATTEN controls
 
@@ -262,7 +262,7 @@ UI:
 
 | Control | UI type | Default | Notes |
 | --- | --- | --- | --- |
-| `Enable 2D sparse attention` | checkbox | `False` | Forge Neo 本体に存在しない Nz-fast-anima 実験機能。 |
+| `Enable 2D sparse attention` | checkbox | `False` | Forge Neo 本体に存在しない Nz-Anima-PredLab 実験機能。 |
 | `Sparse backend` | radio | `NATTEN (optional)` | `NATTEN` が利用可能なら既定で使う。利用不可の場合は選択不可または degraded 表示にし、`Torch prototype` を検証用 fallback として選べるようにする。 |
 | `Sparse target` | radio | `self attention only` | cross-attention は text/context sequence を使うため初期実験では変更しない。 |
 | `Block start` | slider | `14` | 28 blocks の後半から適用する初期 preset。ユーザーが `0..27` の範囲で調整できる。Enable off では無効。 |
@@ -357,8 +357,8 @@ Verbose diagnose log
 永続 key:
 
 ```text
-nzfa_print_timing_log
-nzfa_verbose_diagnose_log
+nzap_print_timing_log
+nzap_verbose_diagnose_log
 ```
 
 動作:
@@ -466,7 +466,7 @@ reason: str
 出力 prefix:
 
 ```text
-[Nz-fast-anima]
+[Nz-Anima-PredLab]
 ```
 
 必須項目:
@@ -599,7 +599,7 @@ avg_step_time = sum(step_durations) / len(step_durations)
 
 - `logs/`, `cache/`, `tmp/` のように用途別 directory を分ける。
 - 生成物は git 管理しない。
-- cache key には Forge Neo version、Nz-fast-anima version、checkpoint hash / filename、mode を含める。
+- cache key には Forge Neo version、Nz-Anima-PredLab version、checkpoint hash / filename、mode を含める。
 - cache が壊れている場合は破棄して再生成し、生成処理を止めない。
 - 個人環境の絶対 path を共有用レポートへそのまま出さない。
 
@@ -607,17 +607,17 @@ avg_step_time = sum(step_durations) / len(step_durations)
 
 初期診断では高速化 patch を行わない。ただし実機検証用に、画像内容を変えない identity patch を許可する。
 
-`Identity patch test` では `backend.nn.anima.Block.forward` を Nz-fast-anima の wrapper に差し替え、wrapper 内で元の `Block.forward` をそのまま呼ぶ。これは高速化ではなく、Forge Neo 本体の推論パイプラインの一部を拡張側から安全に迂回・復帰できるかを確認するための検証である。
+`Identity patch test` では `backend.nn.anima.Block.forward` を Nz-Anima-PredLab の wrapper に差し替え、wrapper 内で元の `Block.forward` をそのまま呼ぶ。これは高速化ではなく、Forge Neo 本体の推論パイプラインの一部を拡張側から安全に迂回・復帰できるかを確認するための検証である。
 
 検証ログ:
 
 - patch 適用対象と挙動: `target=backend.nn.anima.Block.forward behavior=call_original`
-- 各 call の一部: `identity_patch_call=... route=Nz-fast-anima->original_Block.forward`
+- 各 call の一部: `identity_patch_call=... route=Nz-Anima-PredLab->original_Block.forward`
 - 生成後 summary: `identity_patch_summary=calls=... shape_mismatches=... errors=... active=True`
 
 2026-05-26 の StabilityMatrix版 Forge Neo 実機検証では、32 steps / 28 blocks の生成で
 `identity_patch_summary=calls=896 num_blocks=28 shape_mismatches=0 errors=0` が得られた。
-これは `32 * 28 = 896` と一致し、Anima block-level の推論経路を Nz-fast-anima wrapper
+これは `32 * 28 = 896` と一致し、Anima block-level の推論経路を Nz-Anima-PredLab wrapper
 経由に切り替えられることを確認した結果である。
 
 将来 patch を行う場合、すべての patch は `patcher.py` で管理する。
@@ -659,7 +659,7 @@ patch 優先順位:
 
 以下の場合は処理を変更しない:
 
-- `Enable Nz-fast-anima` が false
+- `Enable Nz-Anima-PredLab` が false
 - `Debug log mode` が `Off` で、すべての実験機能が baseline / disabled
 - model detection が unsupported
 - txt2img 以外
@@ -678,7 +678,7 @@ patch 優先順位:
 例外処理:
 
 - optional dependency / optional Forge API が見つからない場合は degraded status にする。
-- callback 内で例外が出た場合は `[Nz-fast-anima]` prefix 付きで要点をログに出し、可能なら以後の patch を無効化する。
+- callback 内で例外が出た場合は `[Nz-Anima-PredLab]` prefix 付きで要点をログに出し、可能なら以後の patch を無効化する。
 - 例外を握りつぶして silent failure にしない。ただし画像生成を止める例外は最小化する。
 
 ## 14. 出力例
@@ -686,40 +686,40 @@ patch 優先順位:
 Diagnose only:
 
 ```text
-[Nz-fast-anima] version=0.1.1 enabled=True mode=Diagnose only status=diagnosing
-[Nz-fast-anima] model_supported=True confidence=strong family=anima
-[Nz-fast-anima] sampler=ER SDE scheduler=Normal steps=30 cfg=5.0 resolution=1536x1536
-[Nz-fast-anima] denoiser_calls=30 avg_step_time=1.234s total_sampling_time=37.020s
+[Nz-Anima-PredLab] version=0.1.1 enabled=True mode=Diagnose only status=diagnosing
+[Nz-Anima-PredLab] model_supported=True confidence=strong family=anima
+[Nz-Anima-PredLab] sampler=ER SDE scheduler=Normal steps=30 cfg=5.0 resolution=1536x1536
+[Nz-Anima-PredLab] denoiser_calls=30 avg_step_time=1.234s total_sampling_time=37.020s
 ```
 
 Identity patch test:
 
 ```text
-[Nz-fast-anima] applied identity patch kind=block_forward_identity target=backend.nn.anima.Block.forward behavior=call_original
-[Nz-fast-anima] version=0.1.1 enabled=True mode=Identity patch test status=identity-patch
-[Nz-fast-anima] identity_patch_call=call=0 block_index=0 input_shape=2x1x96x96x2048 output_shape=2x1x96x96x2048 same_shape=True route=Nz-fast-anima->original_Block.forward
-[Nz-fast-anima] identity_patch_summary=calls=896 num_blocks=28 logged_calls=17 shape_mismatches=0 errors=0 active=True target=backend.nn.anima.Block.forward behavior=call_original
+[Nz-Anima-PredLab] applied identity patch kind=block_forward_identity target=backend.nn.anima.Block.forward behavior=call_original
+[Nz-Anima-PredLab] version=0.1.1 enabled=True mode=Identity patch test status=identity-patch
+[Nz-Anima-PredLab] identity_patch_call=call=0 block_index=0 input_shape=2x1x96x96x2048 output_shape=2x1x96x96x2048 same_shape=True route=Nz-Anima-PredLab->original_Block.forward
+[Nz-Anima-PredLab] identity_patch_summary=calls=896 num_blocks=28 logged_calls=17 shape_mismatches=0 errors=0 active=True target=backend.nn.anima.Block.forward behavior=call_original
 ```
 
 Trace attention:
 
 ```text
-[Nz-fast-anima] attention_backend=attention_sage
-[Nz-fast-anima] sage_enabled=True flash_enabled=False xformers_enabled=False pytorch_attention_enabled=True
-[Nz-fast-anima] anima_attention_path=SelfCrossAttention -> backend.attention.attention_function
+[Nz-Anima-PredLab] attention_backend=attention_sage
+[Nz-Anima-PredLab] sage_enabled=True flash_enabled=False xformers_enabled=False pytorch_attention_enabled=True
+[Nz-Anima-PredLab] anima_attention_path=SelfCrossAttention -> backend.attention.attention_function
 ```
 
 Trace cond/uncond:
 
 ```text
-[Nz-fast-anima] cfg=5.0 uncond_present=True denoiser_step=4/30
-[Nz-fast-anima] cond_or_uncond=[0, 1] cond_indices=[0] uncond_indices=[1]
+[Nz-Anima-PredLab] cfg=5.0 uncond_present=True denoiser_step=4/30
+[Nz-Anima-PredLab] cond_or_uncond=[0, 1] cond_indices=[0] uncond_indices=[1]
 ```
 
 Trace low-bit / compile:
 
 ```text
-[Nz-fast-anima] forge_ops=ForgeOperationsInt8 storage_dtype=torch.int8 computation_dtype=torch.bfloat16
+[Nz-Anima-PredLab] forge_ops=ForgeOperationsInt8 storage_dtype=torch.int8 computation_dtype=torch.bfloat16
 ```
 
 ## 15. Packaging / compatibility
@@ -742,10 +742,10 @@ README に明記する項目:
 初期診断版の完了条件:
 
 - Forge Neo 拡張として読み込まれる。
-- settings に `Enable Nz-fast-anima` が表示される。
-- settings key が `nzfa_*` に統一されている。
+- settings に `Enable Nz-Anima-PredLab` が表示される。
+- settings key が `nzap_*` に統一されている。
 - mode を選択できる。
-- `scripts/nz_fast_anima.py` が薄い entrypoint になっている。
+- `scripts/nz_anima_predlab.py` が薄い entrypoint になっている。
 - callback 登録が多重実行されない。
 - import 時にモデル検査や GPU 処理を行わない。
 - unsupported model で処理変更が起きない。
@@ -789,5 +789,5 @@ README に明記する項目:
 - `Torch prototype` は高速化本命ではなく、NATTEN なしでも破綻するかを切り分けるための backend とする。
 - 実験結果はコンソール summary のみで確認する。JSON / CSV 保存は初期実装では行わない。
 - 画質比較は目視確認のみとする。baseline / patched pair の自動保存は初期実装では行わない。
-- UI は top-level の `Nz-fast-anima` Accordion 1つの配下にカテゴリ別サブ Accordion を置く。他拡張と同じ階層に Nz-fast-anima 用 Accordion を複数作らない。
+- UI は top-level の `Nz-Anima-PredLab` Accordion 1つの配下にカテゴリ別サブ Accordion を置く。他拡張と同じ階層に Nz-Anima-PredLab 用 Accordion を複数作らない。
 - low-bit / compile で model reload が必要な設定がある場合、自動 reload は行わない。UI またはログで「設定変更時にはモデルをリロードしてください」と知らせる。

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .state import MODE_OFF, MODES
 
-SECTION = ("nz_fast_anima", "Nz-fast-anima")
+SECTION = ("nz_anima_predlab", "Nz-Anima-PredLab")
 
 
 def on_ui_settings() -> None:
@@ -15,15 +15,15 @@ def on_ui_settings() -> None:
         shared.opts.add_option(key, info)
 
     add_option_once(
-        "nzfa_enable",
+        "nzap_enable",
         shared.OptionInfo(
             False,
-            "Enable Nz-fast-anima",
+            "Enable Nz-Anima-PredLab",
             section=SECTION,
         ),
     )
     add_option_once(
-        "nzfa_mode",
+        "nzap_mode",
         shared.OptionInfo(
             MODE_OFF,
             "Debug log mode",
@@ -33,7 +33,7 @@ def on_ui_settings() -> None:
         ),
     )
     add_option_once(
-        "nzfa_print_timing_log",
+        "nzap_print_timing_log",
         shared.OptionInfo(
             True,
             "Print timing log",
@@ -41,7 +41,7 @@ def on_ui_settings() -> None:
         ),
     )
     add_option_once(
-        "nzfa_verbose_diagnose_log",
+        "nzap_verbose_diagnose_log",
         shared.OptionInfo(
             False,
             "Verbose diagnose log",

@@ -112,11 +112,11 @@ class RuntimeState:
             from modules import shared
 
             opts = shared.opts
-            self.enabled = bool(getattr(opts, "nzfa_enable", False))
-            self.mode = str(getattr(opts, "nzfa_mode", MODE_OFF))
-            self.print_timing_log = bool(getattr(opts, "nzfa_print_timing_log", True))
+            self.enabled = bool(getattr(opts, "nzap_enable", False))
+            self.mode = str(getattr(opts, "nzap_mode", MODE_OFF))
+            self.print_timing_log = bool(getattr(opts, "nzap_print_timing_log", True))
             self.verbose_diagnose_log = bool(
-                getattr(opts, "nzfa_verbose_diagnose_log", False)
+                getattr(opts, "nzap_verbose_diagnose_log", False)
             )
         except Exception as exc:
             self.enabled = False

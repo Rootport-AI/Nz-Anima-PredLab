@@ -1,4 +1,4 @@
-# Forge Neo implementation research for Nz-fast-anima
+# Forge Neo implementation research for Nz-Anima-PredLab
 
 This document summarizes implementation notes from `Haoming02/sd-webui-forge-classic`
 branch `neo`, with the goal of designing a Forge Neo extension that can diagnose and
@@ -10,7 +10,7 @@ Source repository:
 
 ## Project interpretation
 
-`Nz-fast-anima` should eventually change parts of the inference pipeline to make
+`Nz-Anima-PredLab` should eventually change parts of the inference pipeline to make
 Anima image generation faster. The quality target is not bit-identical output; it is
 that generated images still appear visually close to the Forge Neo baseline and do
 not suffer major style, face, hand, linework, hair, or background failures.
@@ -53,7 +53,7 @@ Important extension surfaces:
 
 Implication for MVP:
 
-- Use `on_ui_settings()` for global settings such as `Enable Nz-fast-anima`,
+- Use `on_ui_settings()` for global settings such as `Enable Nz-Anima-PredLab`,
   `Mode`, `Print timing log`, and `Verbose diagnose log`.
 - Use an `AlwaysVisible` script only if per-generation UI controls are needed.
 - Use `on_model_loaded()` and `process_before_every_sampling()` to establish
@@ -85,7 +85,7 @@ The loader maps Hugging Face component class `CosmosTransformer3DModel` to
 `guess.huggingface_repo`; if true, `process_anima()` moves `llm_adapter` weights from
 the transformer state dict to the text encoder state dict.
 
-Likely detection signals for `Nz-fast-anima`:
+Likely detection signals for `Nz-Anima-PredLab`:
 
 - `type(sd_model).__name__`
 - `sd_model.model_config.__class__.__name__`
@@ -377,7 +377,7 @@ Timing caveat:
 ## Runtime identity patch verification
 
 An `Identity patch test` was run on StabilityMatrix版 Forge Neo on 2026-05-26 to
-verify that Nz-fast-anima can intercept part of the real Anima inference pipeline,
+verify that Nz-Anima-PredLab can intercept part of the real Anima inference pipeline,
 not merely print logs around it.
 
 Patch target:
@@ -387,7 +387,7 @@ Patch target:
 Patch behavior:
 
 - Save the original `Block.forward`.
-- Replace `Block.forward` with a Nz-fast-anima wrapper.
+- Replace `Block.forward` with a Nz-Anima-PredLab wrapper.
 - In the wrapper, call the saved original function with the same arguments.
 - Return the original output unchanged.
 - Log only from inside the wrapper after the original function returns.
@@ -395,9 +395,9 @@ Patch behavior:
 Observed verification logs:
 
 ```text
-[Nz-fast-anima] applied identity patch kind=block_forward_identity target=backend.nn.anima.Block.forward behavior=call_original
-[Nz-fast-anima] identity_patch_call=call=0 block_index=0 input_shape=2x1x96x96x2048 output_shape=2x1x96x96x2048 same_shape=True input_dtype=torch.bfloat16 output_dtype=torch.bfloat16 device=cuda:0 route=Nz-fast-anima->original_Block.forward
-[Nz-fast-anima] identity_patch_summary=calls=896 num_blocks=28 logged_calls=17 shape_mismatches=0 errors=0 active=True target=backend.nn.anima.Block.forward behavior=call_original
+[Nz-Anima-PredLab] applied identity patch kind=block_forward_identity target=backend.nn.anima.Block.forward behavior=call_original
+[Nz-Anima-PredLab] identity_patch_call=call=0 block_index=0 input_shape=2x1x96x96x2048 output_shape=2x1x96x96x2048 same_shape=True input_dtype=torch.bfloat16 output_dtype=torch.bfloat16 device=cuda:0 route=Nz-Anima-PredLab->original_Block.forward
+[Nz-Anima-PredLab] identity_patch_summary=calls=896 num_blocks=28 logged_calls=17 shape_mismatches=0 errors=0 active=True target=backend.nn.anima.Block.forward behavior=call_original
 ```
 
 Interpretation:
@@ -412,7 +412,7 @@ Interpretation:
 - `shape_mismatches=0` and `errors=0` indicate that the identity wrapper did not
   break the observed run.
 
-This verifies that Nz-fast-anima can route the Anima block-level inference path
+This verifies that Nz-Anima-PredLab can route the Anima block-level inference path
 through extension code and then return to Forge Neo's original implementation.
 
 ## Pipeline interception notes
@@ -569,13 +569,13 @@ Before implementing acceleration, the extension should be able to print:
 Suggested implementation modules:
 
 ```text
-scripts/nz_fast_anima.py
-nz_fast_anima/__init__.py
-nz_fast_anima/settings.py
-nz_fast_anima/model_detect.py
-nz_fast_anima/diagnostics.py
-nz_fast_anima/timing.py
-nz_fast_anima/forge_introspection.py
+scripts/nz_anima_predlab.py
+nz_anima_predlab/__init__.py
+nz_anima_predlab/settings.py
+nz_anima_predlab/model_detect.py
+nz_anima_predlab/diagnostics.py
+nz_anima_predlab/timing.py
+nz_anima_predlab/forge_introspection.py
 ```
 
 ## Open questions

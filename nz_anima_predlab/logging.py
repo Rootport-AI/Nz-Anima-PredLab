@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import logging as py_logging
 
-PREFIX = "[Nz-fast-anima]"
+PREFIX = "[Nz-Anima-PredLab]"
 
-logger = py_logging.getLogger("Nz-fast-anima")
+logger = py_logging.getLogger("Nz-Anima-PredLab")
 logger.setLevel(py_logging.INFO)
 
 

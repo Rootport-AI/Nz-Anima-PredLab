@@ -1,8 +1,8 @@
-# Nz-fast-anima 要件定義 v0.1.1
+# Nz-Anima-PredLab 要件定義 v0.1.1
 
 ## 1. 概要
 
-`Nz-fast-anima` は、StabilityMatrix版 Forge Neo / SD WebUI Forge Neo 上で、Anima / Cosmos-Predict2 系T2Iモデルの **1ステップあたりの推論時間短縮** を目的とする実験的拡張機能である。
+`Nz-Anima-PredLab` は、StabilityMatrix版 Forge Neo / SD WebUI Forge Neo 上で、Anima / Cosmos-Predict2 系T2Iモデルの **1ステップあたりの推論時間短縮** を目的とする実験的拡張機能である。
 
 本拡張は、ステップ数削減・4step LoRA・スケジューラー最適化ではなく、既存の推論ステップ数を維持したまま、1step内部の計算を軽量化することを目指す。
 
@@ -182,7 +182,7 @@ Forge NeoのUIに以下を追加する。
 
 ### 6.1 基本設定
 
-- `Enable Nz-fast-anima`
+- `Enable Nz-Anima-PredLab`
   - チェックボックス
   - OFF時は通常のForge Neo推論に完全に戻る。
 
@@ -223,7 +223,7 @@ Forge NeoのUIに以下を追加する。
 
 必須:
 
-- Nz-fast-anima version
+- Nz-Anima-PredLab version
 - 有効/無効状態
 - model判定結果
 - sampler名
@@ -250,12 +250,12 @@ Forge NeoのUIに以下を追加する。
 出力例:
 
 ```text
-[Nz-fast-anima] enabled=True mode=Diagnose only
-[Nz-fast-anima] model=Anima/Cosmos-Predict2-2B
-[Nz-fast-anima] sampler=ER SDE scheduler=Normal steps=30 cfg=5.0
-[Nz-fast-anima] resolution=1536x1536
-[Nz-fast-anima] attention_backend=torch_sdpa
-[Nz-fast-anima] avg_step_time=1.234s total_sampling_time=37.02s
+[Nz-Anima-PredLab] enabled=True mode=Diagnose only
+[Nz-Anima-PredLab] model=Anima/Cosmos-Predict2-2B
+[Nz-Anima-PredLab] sampler=ER SDE scheduler=Normal steps=30 cfg=5.0
+[Nz-Anima-PredLab] resolution=1536x1536
+[Nz-Anima-PredLab] attention_backend=torch_sdpa
+[Nz-Anima-PredLab] avg_step_time=1.234s total_sampling_time=37.02s
 ```
 
 ## 8. 実装方針
@@ -267,16 +267,16 @@ Forge Neo本体を直接改造しない。
 想定ディレクトリ:
 
 ```text
-extensions/Nz-fast-anima/
+extensions/Nz-Anima-PredLab/
 ```
 
 基本構成:
 
 ```text
-Nz-fast-anima/
+Nz-Anima-PredLab/
 ├── scripts/
-│   └── nz_fast_anima.py
-├── nz_fast_anima/
+│   └── nz_anima_predlab.py
+├── nz_anima_predlab/
 │   ├── __init__.py
 │   ├── settings.py
 │   ├── model_detect.py
@@ -346,7 +346,7 @@ Forge Neo側の実装調査、実験候補、patch point、未解決事項は、
 比較対象:
 
 - baseline Forge Neo
-- Nz-fast-anima enabled
+- Nz-Anima-PredLab enabled
 
 評価:
 

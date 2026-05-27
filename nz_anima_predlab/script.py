@@ -28,46 +28,46 @@ register_callbacks()
 
 class Script(scripts.Script):
     def title(self):
-        return "Nz-fast-anima"
+        return "Nz-Anima-PredLab"
 
     def show(self, is_img2img):
         return scripts.AlwaysVisible
 
     def ui(self, is_img2img):
-        with gr.Accordion("Nz-fast-anima", open=False, elem_id="nzfa-panel"):
+        with gr.Accordion("Nz-Anima-PredLab", open=False, elem_id="nzap-panel"):
             enabled = gr.Checkbox(
-                label="Enable Nz-fast-anima",
-                value=_default_option("nzfa_enable", False),
-                elem_id="nzfa-enable",
+                label="Enable Nz-Anima-PredLab",
+                value=_default_option("nzap_enable", False),
+                elem_id="nzap-enable",
             )
             mode = gr.Dropdown(
                 label="Debug log mode",
                 choices=MODES,
-                value=_default_option("nzfa_mode", MODE_OFF),
-                elem_id="nzfa-mode",
+                value=_default_option("nzap_mode", MODE_OFF),
+                elem_id="nzap-mode",
             )
             print_timing_log = gr.Checkbox(
                 label="Print timing log",
-                value=_default_option("nzfa_print_timing_log", True),
-                elem_id="nzfa-print-timing-log",
+                value=_default_option("nzap_print_timing_log", True),
+                elem_id="nzap-print-timing-log",
             )
             verbose_diagnose_log = gr.Checkbox(
                 label="Verbose diagnose log",
-                value=_default_option("nzfa_verbose_diagnose_log", False),
-                elem_id="nzfa-verbose-diagnose-log",
+                value=_default_option("nzap_verbose_diagnose_log", False),
+                elem_id="nzap-verbose-diagnose-log",
             )
-            with gr.Accordion("Attention", open=False, elem_id="nzfa-attention-panel"):
+            with gr.Accordion("Attention", open=False, elem_id="nzap-attention-panel"):
                 attention_backend = gr.Dropdown(
                     label="Attention backend",
                     choices=ATTENTION_BACKENDS,
                     value=ATTENTION_BACKEND_CURRENT,
-                    elem_id="nzfa-attention-backend",
+                    elem_id="nzap-attention-backend",
                 )
                 attention_target = gr.Radio(
                     label="Attention target",
                     choices=ATTENTION_TARGETS,
                     value=ATTENTION_TARGET_BOTH,
-                    elem_id="nzfa-attention-target",
+                    elem_id="nzap-attention-target",
                 )
                 attention_block_start = gr.Slider(
                     label="Attention block start",
@@ -75,7 +75,7 @@ class Script(scripts.Script):
                     maximum=27,
                     step=1,
                     value=0,
-                    elem_id="nzfa-attention-block-start",
+                    elem_id="nzap-attention-block-start",
                 )
                 attention_block_end = gr.Slider(
                     label="Attention block end",
@@ -83,19 +83,19 @@ class Script(scripts.Script):
                     maximum=27,
                     step=1,
                     value=27,
-                    elem_id="nzfa-attention-block-end",
+                    elem_id="nzap-attention-block-end",
                 )
-            with gr.Accordion("2D Sparse", open=False, elem_id="nzfa-sparse-panel"):
+            with gr.Accordion("2D Sparse", open=False, elem_id="nzap-sparse-panel"):
                 sparse_enabled = gr.Checkbox(
                     label="Enable 2D sparse attention",
                     value=False,
-                    elem_id="nzfa-sparse-enable",
+                    elem_id="nzap-sparse-enable",
                 )
                 sparse_backend = gr.Radio(
                     label="Sparse backend",
                     choices=SPARSE_BACKENDS,
                     value=SPARSE_BACKEND_NATTEN,
-                    elem_id="nzfa-sparse-backend",
+                    elem_id="nzap-sparse-backend",
                 )
                 sparse_block_start = gr.Slider(
                     label="Block start",
@@ -103,7 +103,7 @@ class Script(scripts.Script):
                     maximum=27,
                     step=1,
                     value=14,
-                    elem_id="nzfa-sparse-block-start",
+                    elem_id="nzap-sparse-block-start",
                 )
                 sparse_block_end = gr.Slider(
                     label="Block end",
@@ -111,7 +111,7 @@ class Script(scripts.Script):
                     maximum=27,
                     step=1,
                     value=27,
-                    elem_id="nzfa-sparse-block-end",
+                    elem_id="nzap-sparse-block-end",
                 )
                 sparse_step_start = gr.Slider(
                     label="Step start",
@@ -119,7 +119,7 @@ class Script(scripts.Script):
                     maximum=150,
                     step=1,
                     value=0,
-                    elem_id="nzfa-sparse-step-start",
+                    elem_id="nzap-sparse-step-start",
                 )
                 sparse_step_end = gr.Slider(
                     label="Step end (-1 = last)",
@@ -127,7 +127,7 @@ class Script(scripts.Script):
                     maximum=150,
                     step=1,
                     value=-1,
-                    elem_id="nzfa-sparse-step-end",
+                    elem_id="nzap-sparse-step-end",
                 )
                 sparse_local_window = gr.Slider(
                     label="Local attention window",
@@ -135,7 +135,7 @@ class Script(scripts.Script):
                     maximum=63,
                     step=2,
                     value=15,
-                    elem_id="nzfa-sparse-local-window",
+                    elem_id="nzap-sparse-local-window",
                 )
                 sparse_dilation = gr.Slider(
                     label="Dilation",
@@ -143,7 +143,7 @@ class Script(scripts.Script):
                     maximum=8,
                     step=1,
                     value=1,
-                    elem_id="nzfa-sparse-dilation",
+                    elem_id="nzap-sparse-dilation",
                 )
                 sparse_full_attention_interval = gr.Slider(
                     label="Full attention interval (0 = off)",
@@ -151,23 +151,23 @@ class Script(scripts.Script):
                     maximum=64,
                     step=1,
                     value=0,
-                    elem_id="nzfa-sparse-full-attention-interval",
+                    elem_id="nzap-sparse-full-attention-interval",
                 )
-            with gr.Accordion("Cond / Uncond", open=False, elem_id="nzfa-cond-panel"):
+            with gr.Accordion("Cond / Uncond", open=False, elem_id="nzap-cond-panel"):
                 cond_uncond_enabled = gr.Checkbox(
                     label="Enable cond/uncond optimization",
                     value=False,
-                    elem_id="nzfa-cond-enable",
+                    elem_id="nzap-cond-enable",
                 )
                 cond_uncond_skip_cfg1 = gr.Checkbox(
                     label="Skip uncond when CFG=1",
                     value=False,
-                    elem_id="nzfa-cond-skip-cfg1",
+                    elem_id="nzap-cond-skip-cfg1",
                 )
                 cond_uncond_schedule_enabled = gr.Checkbox(
                     label="Guidance step schedule",
                     value=False,
-                    elem_id="nzfa-cond-schedule",
+                    elem_id="nzap-cond-schedule",
                 )
                 cond_uncond_guidance_interval = gr.Slider(
                     label="Guidance interval",
@@ -175,22 +175,22 @@ class Script(scripts.Script):
                     maximum=64,
                     step=1,
                     value=1,
-                    elem_id="nzfa-cond-guidance-interval",
+                    elem_id="nzap-cond-guidance-interval",
                 )
-            with gr.Accordion("Low-bit / Compile", open=False, elem_id="nzfa-lowbit-panel"):
+            with gr.Accordion("Low-bit / Compile", open=False, elem_id="nzap-lowbit-panel"):
                 lowbit_enabled = gr.Checkbox(
                     label="Enable Nz low-bit experiment",
                     value=False,
-                    elem_id="nzfa-lowbit-enable",
+                    elem_id="nzap-lowbit-enable",
                 )
                 compile_enabled = gr.Checkbox(
                     label="Enable torch.compile experiment",
                     value=False,
-                    elem_id="nzfa-compile-enable",
+                    elem_id="nzap-compile-enable",
                 )
                 gr.Markdown(
                     "Reload the model after changing settings that require model reload.",
-                    elem_id="nzfa-reload-note",
+                    elem_id="nzap-reload-note",
                 )
         return [
             enabled,
