@@ -213,6 +213,8 @@ nzap_mode
 - Forge Neo 本体に存在しない実験機能は、必ず `Enable ...` checkbox を持つ。
 - 実験機能の `Enable` は初期値 `False` とする。
 - すべての experimental checkbox が `False` で、`Attention backend` が `Forge current/default` のままなら、推論結果と推論経路は Forge Neo baseline と同等でなければならない。
+- サブ Accordion 内の実験用 `Enable ...` checkbox を `True` にした場合、親の `Enable Nz-Anima-PredLab` が `False` なら UI callback で `True` にする。
+- 親の `Enable Nz-Anima-PredLab` を `False` にした場合、サブ Accordion 内の checkbox は変更しない。ユーザーが一時的に親だけを off にしても、子項目の調整値を保持する。
 - UI の選択値は生成開始時に snapshot し、生成中に UI を変更しても進行中の batch へは反映しない。
 - 画像生成に影響する実験が有効な場合は、生成ログへ設定 snapshot を出す。
 

@@ -306,14 +306,14 @@ class Script(scripts.Script):
                         outputs=[spectrum_preset],
                     )
                 teacache_enabled.change(
-                    fn=_disable_spectrum_if_teacache,
+                    fn=_teacache_enable_updates,
                     inputs=[teacache_enabled],
-                    outputs=[spectrum_enabled],
+                    outputs=[spectrum_enabled, enabled],
                 )
                 spectrum_enabled.change(
-                    fn=_disable_teacache_if_spectrum,
+                    fn=_spectrum_enable_updates,
                     inputs=[spectrum_enabled],
-                    outputs=[teacache_enabled],
+                    outputs=[teacache_enabled, enabled],
                 )
             with gr.Accordion("2D Sparse", open=False, elem_id="nzap-sparse-panel"):
                 sparse_enabled = gr.Checkbox(
@@ -383,6 +383,11 @@ class Script(scripts.Script):
                     value=0,
                     elem_id="nzap-sparse-full-attention-interval",
                 )
+                sparse_enabled.change(
+                    fn=_enable_parent_if_child_enabled,
+                    inputs=[sparse_enabled],
+                    outputs=[enabled],
+                )
             with gr.Accordion("Cond / Uncond", open=False, elem_id="nzap-cond-panel"):
                 cond_uncond_enabled = gr.Checkbox(
                     label="Enable cond/uncond optimization",
@@ -407,6 +412,11 @@ class Script(scripts.Script):
                     value=1,
                     elem_id="nzap-cond-guidance-interval",
                 )
+                cond_uncond_enabled.change(
+                    fn=_enable_parent_if_child_enabled,
+                    inputs=[cond_uncond_enabled],
+                    outputs=[enabled],
+                )
             with gr.Accordion("Low-bit / Compile", open=False, elem_id="nzap-lowbit-panel"):
                 lowbit_enabled = gr.Checkbox(
                     label="Enable Nz low-bit experiment",
@@ -421,6 +431,16 @@ class Script(scripts.Script):
                 gr.Markdown(
                     "Reload the model after changing settings that require model reload.",
                     elem_id="nzap-reload-note",
+                )
+                lowbit_enabled.change(
+                    fn=_enable_parent_if_child_enabled,
+                    inputs=[lowbit_enabled],
+                    outputs=[enabled],
+                )
+                compile_enabled.change(
+                    fn=_enable_parent_if_child_enabled,
+                    inputs=[compile_enabled],
+                    outputs=[enabled],
                 )
         return [
             enabled,
@@ -655,13 +675,19 @@ def _spectrum_mark_custom():
     return SPECTRUM_PRESET_CUSTOM
 
 
-def _disable_spectrum_if_teacache(enabled: bool):
-    if enabled:
-        return False
-    return gr.update()
+def _teacache_enable_updates(child_enabled: bool):
+    if child_enabled:
+        return False, True
+    return gr.update(), gr.update()
 
 
-def _disable_teacache_if_spectrum(enabled: bool):
-    if enabled:
-        return False
+def _spectrum_enable_updates(child_enabled: bool):
+    if child_enabled:
+        return False, True
+    return gr.update(), gr.update()
+
+
+def _enable_parent_if_child_enabled(child_enabled: bool):
+    if child_enabled:
+        return True
     return gr.update()
