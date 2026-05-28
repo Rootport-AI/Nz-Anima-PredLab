@@ -19,6 +19,11 @@ from .state import (
     MODES,
     SPARSE_BACKEND_NATTEN,
     SPARSE_BACKENDS,
+    SPECTRUM_PRESET_AGGRESSIVE,
+    SPECTRUM_PRESET_BALANCED,
+    SPECTRUM_PRESET_CUSTOM,
+    SPECTRUM_PRESET_SAFE,
+    SPECTRUM_PRESETS,
     STATE,
     TEACACHE_CACHE_DEVICE_CUDA,
     TEACACHE_CACHE_DEVICES,
@@ -195,6 +200,121 @@ class Script(scripts.Script):
                         inputs=[],
                         outputs=[teacache_preset],
                     )
+            with gr.Accordion("Spectrum", open=False, elem_id="nzap-spectrum-panel"):
+                spectrum_enabled = gr.Checkbox(
+                    label="Enable Spectrum experiment",
+                    value=False,
+                    elem_id="nzap-spectrum-enable",
+                )
+                spectrum_preset = gr.Dropdown(
+                    label="Spectrum preset",
+                    choices=SPECTRUM_PRESETS,
+                    value=SPECTRUM_PRESET_BALANCED,
+                    elem_id="nzap-spectrum-preset",
+                )
+                spectrum_w = gr.Slider(
+                    label="Prediction weighting",
+                    minimum=0.0,
+                    maximum=1.0,
+                    step=0.01,
+                    value=0.20,
+                    elem_id="nzap-spectrum-w",
+                )
+                spectrum_m = gr.Slider(
+                    label="Polynomial degree",
+                    minimum=1,
+                    maximum=32,
+                    step=1,
+                    value=16,
+                    elem_id="nzap-spectrum-m",
+                )
+                spectrum_lambda = gr.Slider(
+                    label="Ridge lambda",
+                    minimum=0.0,
+                    maximum=100.0,
+                    step=0.01,
+                    value=0.50,
+                    elem_id="nzap-spectrum-lambda",
+                )
+                spectrum_warmup_steps = gr.Slider(
+                    label="Warmup steps",
+                    minimum=0,
+                    maximum=50,
+                    step=1,
+                    value=6,
+                    elem_id="nzap-spectrum-warmup-steps",
+                )
+                spectrum_window_size = gr.Slider(
+                    label="Window size",
+                    minimum=1,
+                    maximum=64,
+                    step=1,
+                    value=2,
+                    elem_id="nzap-spectrum-window-size",
+                )
+                spectrum_flex_window = gr.Slider(
+                    label="Flex window",
+                    minimum=0.0,
+                    maximum=2.0,
+                    step=0.01,
+                    value=0.0,
+                    elem_id="nzap-spectrum-flex-window",
+                )
+                spectrum_stop_progress = gr.Slider(
+                    label="Stop progress",
+                    minimum=0.0,
+                    maximum=1.0,
+                    step=0.01,
+                    value=0.80,
+                    elem_id="nzap-spectrum-stop-progress",
+                )
+                spectrum_dry_run = gr.Checkbox(
+                    label="Dry run",
+                    value=False,
+                    elem_id="nzap-spectrum-dry-run",
+                )
+                spectrum_verbose_trace = gr.Checkbox(
+                    label="Verbose Spectrum trace",
+                    value=False,
+                    elem_id="nzap-spectrum-verbose-trace",
+                )
+                spectrum_preset.change(
+                    fn=_spectrum_preset_updates,
+                    inputs=[spectrum_preset],
+                    outputs=[
+                        spectrum_w,
+                        spectrum_m,
+                        spectrum_lambda,
+                        spectrum_warmup_steps,
+                        spectrum_window_size,
+                        spectrum_flex_window,
+                        spectrum_stop_progress,
+                    ],
+                )
+                for control in (
+                    spectrum_w,
+                    spectrum_m,
+                    spectrum_lambda,
+                    spectrum_warmup_steps,
+                    spectrum_window_size,
+                    spectrum_flex_window,
+                    spectrum_stop_progress,
+                ):
+                    control.change(
+                        fn=_spectrum_mark_custom,
+                        inputs=[],
+                        outputs=[spectrum_preset],
+                    )
+                teacache_enabled.change(
+                    fn=_disable_spectrum_if_teacache,
+                    inputs=[teacache_enabled],
+                    outputs=[spectrum_enabled],
+                )
+                spectrum_enabled.change(
+                    fn=_disable_teacache_if_spectrum,
+                    inputs=[spectrum_enabled],
+                    outputs=[teacache_enabled],
+                )
             with gr.Accordion("2D Sparse", open=False, elem_id="nzap-sparse-panel"):
                 sparse_enabled = gr.Checkbox(
                     label="Enable 2D sparse attention",
@@ -338,6 +458,17 @@ class Script(scripts.Script):
             teacache_force_full_interval,
             teacache_dry_run,
             teacache_verbose_trace,
+            spectrum_enabled,
+            spectrum_preset,
+            spectrum_w,
+            spectrum_m,
+            spectrum_lambda,
+            spectrum_warmup_steps,
+            spectrum_window_size,
+            spectrum_flex_window,
+            spectrum_stop_progress,
+            spectrum_dry_run,
+            spectrum_verbose_trace,
         ]
 
     def process_before_every_sampling(self, p, *script_args, **kwargs):
@@ -356,6 +487,9 @@ class Script(scripts.Script):
 
 
 def _apply_ui_args(script_args) -> None:
+    if len(script_args) >= 46:
+        STATE.apply_options(*script_args[:46])
+        return
     if len(script_args) >= 35:
         STATE.apply_options(*script_args[:35])
         return
@@ -388,7 +522,7 @@ def _begin_generation(p, script_args, source: str) -> None:
         if STATE.model_detection is None:
             raise
 
-    if not getattr(STATE.model_detection, "supported", False):
+    if not getattr(STATE.model_detection, "supported", False) and _requires_supported_model():
         _remove_generation_patches()
         log_generation_start(p)
         return
@@ -403,6 +537,7 @@ def _configure_generation_patches() -> None:
         remove_patch("attention_kernel")
         remove_patch("sparse_attention")
         remove_patch("teacache")
+        remove_patch("spectrum")
         apply_patch("block_forward_identity")
         return
 
@@ -411,17 +546,32 @@ def _configure_generation_patches() -> None:
         remove_patch("block_structure_trace")
         remove_patch("attention_kernel")
         remove_patch("sparse_attention")
+        remove_patch("spectrum")
         result = apply_patch("teacache")
         if not result.ok:
             STATE.teacache_unavailable_reason = result.message
             warning(f"teacache_patch_unavailable reason={result.message}")
+    elif STATE.spectrum_enabled:
+        remove_patch("teacache")
+        remove_patch("block_structure_trace")
+        remove_patch("sparse_attention")
+        result = apply_patch("spectrum")
+        if not result.ok:
+            STATE.spectrum_unavailable_reason = result.message
+            warning(f"spectrum_patch_unavailable reason={result.message}")
+        if STATE.attention_override_active():
+            apply_patch("attention_kernel")
+        else:
+            remove_patch("attention_kernel")
     elif STATE.sparse_enabled:
         remove_patch("teacache")
+        remove_patch("spectrum")
         remove_patch("block_structure_trace")
         remove_patch("attention_kernel")
         apply_patch("sparse_attention")
     else:
         remove_patch("teacache")
+        remove_patch("spectrum")
         remove_patch("sparse_attention")
         if STATE.attention_override_active():
             remove_patch("block_structure_trace")
@@ -433,6 +583,7 @@ def _configure_generation_patches() -> None:
         STATE.mode == MODE_DIAGNOSE
         and STATE.verbose_diagnose_log
         and not STATE.teacache_enabled
+        and not STATE.spectrum_enabled
         and not STATE.sparse_enabled
         and not STATE.attention_override_active()
     ):
@@ -447,6 +598,16 @@ def _remove_generation_patches() -> None:
     remove_patch("attention_kernel")
     remove_patch("sparse_attention")
     remove_patch("teacache")
+    remove_patch("spectrum")
+
+
+def _requires_supported_model() -> bool:
+    return (
+        STATE.mode == MODE_IDENTITY_PATCH
+        or STATE.teacache_enabled
+        or STATE.sparse_enabled
+        or STATE.attention_override_active()
+    )
 
 
 def _default_option(key: str, default):
@@ -470,3 +631,37 @@ def _teacache_preset_updates(preset: str):
 
 def _teacache_mark_custom():
     return TEACACHE_PRESET_CUSTOM
+
+
+def _spectrum_preset_updates(preset: str):
+    if preset == SPECTRUM_PRESET_SAFE:
+        return 0.20, 8, 0.50, 8, 2, 0.0, 0.80
+    if preset == SPECTRUM_PRESET_BALANCED:
+        return 0.20, 16, 0.50, 6, 2, 0.0, 0.80
+    if preset == SPECTRUM_PRESET_AGGRESSIVE:
+        return 0.30, 16, 0.50, 6, 2, 0.0, 0.90
+    return (
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+        gr.update(),
+    )
+
+
+def _spectrum_mark_custom():
+    return SPECTRUM_PRESET_CUSTOM
+
+
+def _disable_spectrum_if_teacache(enabled: bool):
+    if enabled:
+        return False
+    return gr.update()
+
+
+def _disable_teacache_if_spectrum(enabled: bool):
+    if enabled:
+        return False
+    return gr.update()

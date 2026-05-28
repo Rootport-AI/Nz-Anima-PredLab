@@ -48,10 +48,11 @@ def log_generation_start(p: Any) -> None:
             info(f"model_evidence={detection.evidence}")
         if not detection.supported:
             key = detection.key or detection.reason
-            if key not in STATE.warned_model_keys:
-                warning(f"unsupported model: {detection.reason}")
-                STATE.warned_model_keys.add(key)
-            STATE.status = "unsupported"
+            if _should_warn_unsupported_model():
+                if key not in STATE.warned_model_keys:
+                    warning(f"unsupported model: {detection.reason}")
+                    STATE.warned_model_keys.add(key)
+                STATE.status = "unsupported"
 
     info(
         "sampler="
@@ -73,14 +74,18 @@ def log_generation_start(p: Any) -> None:
 
 
 def log_experiment_snapshot() -> None:
-    if STATE.attention_override_active() and not STATE.teacache_enabled and not STATE.sparse_enabled:
+    if (
+        STATE.attention_override_active()
+        and not STATE.teacache_enabled
+        and (not STATE.sparse_enabled or STATE.spectrum_enabled)
+    ):
         info(
             "attention_kernel_config="
             f"enabled=True backend={STATE.attention_backend} "
             f"target={STATE.attention_target} "
             f"blocks={STATE.attention_block_start}..{STATE.attention_block_end}"
         )
-    if STATE.sparse_enabled and not STATE.teacache_enabled:
+    if STATE.sparse_enabled and not STATE.teacache_enabled and not STATE.spectrum_enabled:
         info(
             "sparse_config="
             f"enabled=True backend={STATE.sparse_backend} "
@@ -114,6 +119,19 @@ def log_experiment_snapshot() -> None:
             f"max_skip_streak={STATE.teacache_max_skip_streak} "
             f"force_full_interval={STATE.teacache_force_full_interval} "
             f"dry_run={STATE.teacache_dry_run}"
+        )
+    if STATE.spectrum_enabled and not STATE.teacache_enabled:
+        info(
+            "spectrum_config="
+            f"enabled=True preset={STATE.spectrum_preset} "
+            f"w={STATE.spectrum_w:.2f} "
+            f"m={STATE.spectrum_m} "
+            f"lambda={STATE.spectrum_lambda:.2f} "
+            f"warmup={STATE.spectrum_warmup_steps} "
+            f"window={STATE.spectrum_window_size} "
+            f"flex={STATE.spectrum_flex_window:.2f} "
+            f"stop_progress={STATE.spectrum_stop_progress:.2f} "
+            f"dry_run={STATE.spectrum_dry_run}"
         )
     if STATE.cond_uncond_enabled:
         info(
@@ -228,7 +246,7 @@ def log_timing_summary() -> None:
             f"errors={STATE.identity_patch_errors} active={active} "
             "target=backend.nn.anima.Block.forward behavior=call_original"
         )
-    if STATE.sparse_enabled and not STATE.teacache_enabled:
+    if STATE.sparse_enabled and not STATE.teacache_enabled and not STATE.spectrum_enabled:
         active = _is_patch_active("sparse_attention")
         info(
             "sparse_summary="
@@ -239,7 +257,11 @@ def log_timing_summary() -> None:
             f"backend={STATE.sparse_backend} "
             f"unavailable_reason={_fmt(STATE.sparse_unavailable_reason)}"
         )
-    if STATE.attention_override_active() and not STATE.teacache_enabled and not STATE.sparse_enabled:
+    if (
+        STATE.attention_override_active()
+        and not STATE.teacache_enabled
+        and (not STATE.sparse_enabled or STATE.spectrum_enabled)
+    ):
         active = _is_patch_active("attention_kernel")
         info(
             "attention_kernel_summary="
@@ -279,6 +301,36 @@ def log_timing_summary() -> None:
             f"dry_run={STATE.teacache_dry_run} "
             f"unavailable_reason={_fmt(STATE.teacache_unavailable_reason)}"
         )
+    if STATE.spectrum_enabled and not STATE.teacache_enabled:
+        active = _is_patch_active("spectrum")
+        total_decisions = STATE.spectrum_actual_forwards + STATE.spectrum_forecasts
+        forecast_rate = (
+            STATE.spectrum_forecasts / total_decisions
+            if total_decisions
+            else 0.0
+        )
+        info(
+            "spectrum_summary="
+            f"model_calls={STATE.spectrum_model_calls} "
+            f"actual_forwards={STATE.spectrum_actual_forwards} "
+            f"forecasts={STATE.spectrum_forecasts} "
+            f"dry_run_forecasts={STATE.spectrum_dry_run_forecasts} "
+            f"forecast_rate={forecast_rate:.3f} "
+            f"fallbacks={STATE.spectrum_fallbacks} "
+            f"errors={STATE.spectrum_errors} "
+            f"active={active} "
+            f"dry_run={STATE.spectrum_dry_run} "
+            f"unavailable_reason={_fmt(STATE.spectrum_unavailable_reason)}"
+        )
+
+
+def _should_warn_unsupported_model() -> bool:
+    return (
+        STATE.mode == MODE_IDENTITY_PATCH
+        or STATE.teacache_enabled
+        or STATE.sparse_enabled
+        or STATE.attention_override_active()
+    )
 
 
 def _seconds(value: float | int | None) -> str:

@@ -5,6 +5,7 @@ from time import perf_counter
 from typing import Any
 
 from .logging import exception, info, warning
+from .spectrum import FastChebyshevForecaster
 from .state import (
     ATTENTION_BACKEND_CURRENT,
     ATTENTION_TARGET_BOTH,
@@ -42,6 +43,8 @@ def apply_patch(kind: str, context: Any = None) -> PatchResult:
         return _apply_sparse_attention_patch()
     if kind == "teacache":
         return _apply_teacache_patch()
+    if kind == "spectrum":
+        return _apply_spectrum_patch()
     warning(f"patch '{kind}' is not implemented in the diagnostic build")
     return PatchResult(False, kind, "not implemented")
 
@@ -130,6 +133,305 @@ def _log_model_apply_args(args: dict[str, Any], cond: Any, uncond: Any) -> None:
         f"uncond_indices={uncond_indices} input_shape={_shape(input_x)} "
         f"timestep_shape={_shape(timestep)} cond_len={_len(cond)} "
         f"uncond_len={_len(uncond)}"
+    )
+
+
+def _apply_spectrum_patch() -> PatchResult:
+    kind = "spectrum"
+    if is_patched(kind):
+        return PatchResult(True, kind, "already patched")
+
+    try:
+        from backend.sampling import sampling_function
+    except Exception as exc:
+        return PatchResult(False, kind, f"import failed: {exc}")
+
+    original = getattr(sampling_function, "calc_cond_uncond_batch", None)
+    if original is None or not callable(original):
+        return PatchResult(False, kind, "calc_cond_uncond_batch not found")
+
+    runtime = _spectrum_new_runtime()
+
+    def spectrum_calc_cond_uncond_batch(model, cond, uncond, x_in, timestep, model_options):
+        if not _should_spectrum_patch():
+            return original(model, cond, uncond, x_in, timestep, model_options)
+
+        patched_model_options = dict(model_options or {})
+        existing_wrapper = patched_model_options.get("model_function_wrapper")
+        if existing_wrapper is not None:
+            _spectrum_mark_unavailable("existing_model_function_wrapper")
+            return original(model, cond, uncond, x_in, timestep, model_options)
+
+        def model_function_wrapper(model_function, args):
+            return _spectrum_model_function_wrapper(model_function, args, runtime)
+
+        patched_model_options["model_function_wrapper"] = model_function_wrapper
+        return original(model, cond, uncond, x_in, timestep, patched_model_options)
+
+    sampling_function.calc_cond_uncond_batch = spectrum_calc_cond_uncond_batch
+
+    def restore() -> None:
+        sampling_function.calc_cond_uncond_batch = original
+
+    STATE.patches[kind] = {"restore": restore}
+    info(
+        "applied experimental patch kind=spectrum "
+        "target=backend.sampling.sampling_function.calc_cond_uncond_batch "
+        f"preset={STATE.spectrum_preset} w={STATE.spectrum_w:.2f} "
+        f"m={STATE.spectrum_m} lambda={STATE.spectrum_lambda:.2f}"
+    )
+    return PatchResult(True, kind, "applied")
+
+
+def _should_spectrum_patch() -> bool:
+    return STATE.active() and STATE.spectrum_enabled and not STATE.teacache_enabled
+
+
+def _spectrum_new_runtime() -> dict[str, Any]:
+    return {
+        "generation_index": None,
+        "forecaster": None,
+        "cnt": 0,
+        "num_cached": 0,
+        "curr_ws": 1.0,
+        "last_t": None,
+        "last_input_signature": None,
+    }
+
+
+def _spectrum_reset_runtime(runtime: dict[str, Any]) -> None:
+    runtime["generation_index"] = STATE.generation_index
+    runtime["forecaster"] = None
+    runtime["cnt"] = 0
+    runtime["num_cached"] = 0
+    runtime["curr_ws"] = float(max(1, STATE.spectrum_window_size))
+    runtime["last_t"] = None
+    runtime["last_input_signature"] = None
+
+
+def _spectrum_ensure_runtime(runtime: dict[str, Any]) -> None:
+    if runtime.get("generation_index") != STATE.generation_index:
+        _spectrum_reset_runtime(runtime)
+
+
+def _spectrum_mark_unavailable(reason: str) -> None:
+    if STATE.spectrum_unavailable_reason != reason:
+        STATE.spectrum_unavailable_reason = reason
+        warning(f"spectrum_unavailable reason={reason}")
+
+
+def _spectrum_model_function_wrapper(model_function: Any, args: dict[str, Any], runtime: dict[str, Any]):
+    try:
+        return _spectrum_model_function_wrapper_body(model_function, args, runtime)
+    except Exception as exc:
+        STATE.spectrum_errors += 1
+        STATE.spectrum_fallbacks += 1
+        STATE.spectrum_unavailable_reason = _short_error(exc)
+        if STATE.spectrum_logged_calls < 12:
+            STATE.spectrum_logged_calls += 1
+            warning(f"spectrum_fallback=reason={_short_error(exc)} route=actual_forward")
+        return _spectrum_actual_forward(model_function, args)
+
+
+def _spectrum_model_function_wrapper_body(model_function: Any, args: dict[str, Any], runtime: dict[str, Any]):
+    _spectrum_ensure_runtime(runtime)
+
+    x = args.get("input")
+    timestep = args.get("timestep")
+    if x is None or timestep is None or args.get("c") is None:
+        raise RuntimeError("Spectrum wrapper args are incomplete")
+
+    reset_reason = _spectrum_runtime_reset_reason(runtime, x, timestep)
+    if reset_reason:
+        _spectrum_reset_runtime(runtime)
+
+    STATE.spectrum_model_calls += 1
+    cnt = int(runtime.get("cnt", 0))
+    step_index = max(0, STATE.denoiser_calls - 1)
+    progress = _spectrum_progress(cnt)
+    reason = reset_reason or _spectrum_actual_reason(runtime, cnt, progress)
+
+    if reason is not None:
+        out = _spectrum_actual_forward(model_function, args)
+        STATE.spectrum_actual_forwards += 1
+        _spectrum_update_after_actual(runtime, cnt, out, reason)
+        _spectrum_record_runtime_input(runtime, x, timestep)
+        _spectrum_log_call("actual", cnt, step_index, progress, reason, runtime)
+        return out
+
+    if STATE.spectrum_dry_run:
+        out = _spectrum_actual_forward(model_function, args)
+        STATE.spectrum_actual_forwards += 1
+        STATE.spectrum_dry_run_forecasts += 1
+        runtime["num_cached"] = int(runtime.get("num_cached", 0)) + 1
+        runtime["cnt"] = cnt + 1
+        _spectrum_record_runtime_input(runtime, x, timestep)
+        _spectrum_log_call("actual", cnt, step_index, progress, "dry_run", runtime)
+        return out
+
+    try:
+        forecaster = runtime.get("forecaster")
+        if forecaster is None or not forecaster.ready():
+            raise RuntimeError("forecaster is not ready")
+        out = _spectrum_cast_forecast(forecaster.predict(cnt, STATE.spectrum_w), x)
+        _spectrum_validate_forecast(out, x)
+        STATE.spectrum_forecasts += 1
+        runtime["num_cached"] = int(runtime.get("num_cached", 0)) + 1
+        runtime["cnt"] = cnt + 1
+        _spectrum_record_runtime_input(runtime, x, timestep)
+        _spectrum_log_call("forecast", cnt, step_index, progress, "window", runtime)
+        return out
+    except Exception as exc:
+        STATE.spectrum_fallbacks += 1
+        out = _spectrum_actual_forward(model_function, args)
+        STATE.spectrum_actual_forwards += 1
+        _spectrum_update_after_actual(runtime, cnt, out, f"fallback:{_short_error(exc)}")
+        _spectrum_record_runtime_input(runtime, x, timestep)
+        _spectrum_log_call("actual", cnt, step_index, progress, "fallback", runtime)
+        return out
+
+
+def _spectrum_actual_forward(model_function: Any, args: dict[str, Any]):
+    return model_function(args["input"], args["timestep"], **args["c"])
+
+
+def _spectrum_cast_forecast(out: Any, x: Any) -> Any:
+    if not hasattr(out, "to"):
+        return out
+    kwargs: dict[str, Any] = {}
+    dtype = getattr(x, "dtype", None)
+    device = getattr(x, "device", None)
+    if dtype is not None:
+        kwargs["dtype"] = dtype
+    if device is not None:
+        kwargs["device"] = device
+    if not kwargs:
+        return out
+    return out.to(**kwargs)
+
+
+def _spectrum_update_after_actual(runtime: dict[str, Any], cnt: int, out: Any, reason: str) -> None:
+    import torch
+
+    if not torch.is_tensor(out):
+        runtime["cnt"] = cnt + 1
+        runtime["num_cached"] = 0
+        return
+
+    forecaster = runtime.get("forecaster")
+    if forecaster is None:
+        forecaster = FastChebyshevForecaster(
+            m=STATE.spectrum_m,
+            lam=STATE.spectrum_lambda,
+            steps=_spectrum_steps(),
+        )
+        runtime["forecaster"] = forecaster
+
+    if not forecaster.compatible(out):
+        forecaster.reset()
+    forecaster.update(cnt, out)
+    if cnt >= STATE.spectrum_warmup_steps and not reason.startswith("first_call"):
+        runtime["curr_ws"] = float(runtime.get("curr_ws", 1.0)) + STATE.spectrum_flex_window
+    runtime["num_cached"] = 0
+    runtime["cnt"] = cnt + 1
+
+
+def _spectrum_actual_reason(runtime: dict[str, Any], cnt: int, progress: float) -> str | None:
+    import math
+
+    if cnt == 0:
+        return "first_call"
+    if cnt < STATE.spectrum_warmup_steps:
+        return "warmup"
+    if progress >= STATE.spectrum_stop_progress:
+        return "tail_guard"
+    forecaster = runtime.get("forecaster")
+    if forecaster is None or not forecaster.ready():
+        return "no_history"
+    current_ws = max(1, int(math.floor(float(runtime.get("curr_ws", 1.0)))))
+    if (int(runtime.get("num_cached", 0)) + 1) % current_ws == 0:
+        return "window"
+    return None
+
+
+def _spectrum_runtime_reset_reason(runtime: dict[str, Any], x: Any, timestep: Any) -> str | None:
+    signature = _spectrum_input_signature(x)
+    previous_signature = runtime.get("last_input_signature")
+    if previous_signature is not None and signature != previous_signature:
+        return "shape_mismatch"
+
+    current_t = _safe_float_timestep(timestep)
+    previous_t = runtime.get("last_t")
+    if previous_t is not None and current_t > float(previous_t) + 1e-7:
+        return "timestep_reset"
+    return None
+
+
+def _spectrum_input_signature(x: Any) -> tuple[Any, Any, Any]:
+    return (getattr(x, "shape", None), getattr(x, "dtype", None), getattr(x, "device", None))
+
+
+def _spectrum_record_runtime_input(runtime: dict[str, Any], x: Any, timestep: Any) -> None:
+    runtime["last_t"] = _safe_float_timestep(timestep)
+    runtime["last_input_signature"] = _spectrum_input_signature(x)
+
+
+def _spectrum_progress(cnt: int) -> float:
+    steps = _spectrum_steps()
+    if steps <= 1:
+        return 0.0
+    return max(0.0, min(1.0, float(cnt) / float(steps - 1)))
+
+
+def _spectrum_steps() -> int:
+    try:
+        steps = int(STATE.generation_steps or 0)
+    except Exception:
+        steps = 0
+    return max(1, steps or 50)
+
+
+def _safe_float_timestep(timestep: Any) -> float:
+    try:
+        if hasattr(timestep, "flatten"):
+            return float(timestep.flatten()[0].item())
+        return float(timestep)
+    except Exception:
+        return 0.0
+
+
+def _spectrum_validate_forecast(out: Any, x: Any) -> None:
+    import torch
+
+    if getattr(out, "shape", None) != getattr(x, "shape", None):
+        raise RuntimeError(f"forecast shape mismatch output={_shape(out)} input={_shape(x)}")
+    if getattr(out, "dtype", None) != getattr(x, "dtype", None):
+        raise RuntimeError(f"forecast dtype mismatch output={_dtype(out)} input={_dtype(x)}")
+    if getattr(out, "device", None) != getattr(x, "device", None):
+        raise RuntimeError(f"forecast device mismatch output={_device(out)} input={_device(x)}")
+    if not torch.isfinite(out).all():
+        raise RuntimeError("forecast contains NaN or Inf")
+
+
+def _spectrum_log_call(
+    decision: str,
+    cnt: int,
+    step_index: int,
+    progress: float,
+    reason: str,
+    runtime: dict[str, Any],
+) -> None:
+    if not STATE.spectrum_verbose_trace and STATE.spectrum_logged_calls >= 12:
+        return
+    STATE.spectrum_logged_calls += 1
+    forecaster = runtime.get("forecaster")
+    history = len(getattr(forecaster, "h_buf", []) or [])
+    info(
+        "spectrum_call="
+        f"call={STATE.spectrum_model_calls} step={step_index} cnt={cnt} "
+        f"progress={progress:.3f} decision={decision} reason={reason} "
+        f"history={history} window={float(runtime.get('curr_ws', 1.0)):.2f} "
+        f"dry_run={STATE.spectrum_dry_run}"
     )
 
 

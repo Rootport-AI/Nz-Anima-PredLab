@@ -817,7 +817,7 @@ Verbose trace でのみ出す項目:
 
 ## 12. Patch 仕様
 
-現行実装は診断機能に加えて、実機検証用の `Identity patch test`、attention backend 差し替え、2D sparse attention 実験 patch、TeaCache / residual cache 実験 patch の足場を持つ。Spectrum は Anima base v1.0 向けの次期実験として仕様確定済みだが、この時点では未実装とする。
+現行実装は診断機能に加えて、実機検証用の `Identity patch test`、attention backend 差し替え、2D sparse attention 実験 patch、TeaCache / residual cache 実験 patch、Spectrum / spectral feature forecasting 実験 patch を持つ。
 
 `Identity patch test` では `backend.nn.anima.Block.forward` を Nz-Anima-PredLab の wrapper に差し替え、wrapper 内で元の `Block.forward` をそのまま呼ぶ。これは高速化ではなく、Forge Neo 本体の推論パイプラインの一部を拡張側から安全に迂回・復帰できるかを確認するための検証である。
 
@@ -869,12 +869,11 @@ patch 候補:
 - `attention_kernel`: `Block.forward` と `SelfCrossAttention.torch_attention_op` を wrapper し、選択した Forge attention backend を明示実行する。
 - `sparse_attention`: `Block.forward` と `SelfCrossAttention.torch_attention_op` を wrapper し、条件に合う self-attention を 2D sparse attention に置換する。
 
-未実装 patch:
+未実装 / 足場のみ patch:
 
-- `spectrum`
+- `cond_uncond_optimization`
 - `lowbit`
 - `compile`
-- `cond_uncond_optimization`
 
 2D sparse attention は、flatten 後の generic attention だけでは H/W 情報が失われるため、`Block.forward` または `SelfCrossAttention` 付近で形状情報を扱う方針とする。
 
@@ -1034,7 +1033,7 @@ README に明記する項目:
 - インストール手順。
 - 現行版は診断・計測を主目的としつつ、実験機能として identity patch、attention backend差し替え、2D sparse attention の patch 足場を含むこと。
 - TeaCache は実験機能として実装済みだが、品質・速度・skip率は環境ごとの実機検証が必要であること。
-- Spectrum は Anima base v1.0 向けの次期実験機能として仕様確定済みだが、現時点では未実装であること。
+- Spectrum は Anima base v1.0 向けの実験機能として実装済みだが、品質・速度・出力変化は環境ごとの実機検証が必要であること。
 - トラブルシュート: 拡張が表示されない、unsupported model になる、ログが出ない、生成が遅くなった場合。
 
 ## 16. Acceptance Criteria

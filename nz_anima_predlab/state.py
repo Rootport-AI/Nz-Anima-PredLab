@@ -80,6 +80,17 @@ TEACACHE_COEFFICIENTS_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT = [
     0.31229336331906893,
 ]
 
+SPECTRUM_PRESET_SAFE = "Safe"
+SPECTRUM_PRESET_BALANCED = "Balanced"
+SPECTRUM_PRESET_AGGRESSIVE = "Aggressive"
+SPECTRUM_PRESET_CUSTOM = "Custom"
+SPECTRUM_PRESETS = [
+    SPECTRUM_PRESET_SAFE,
+    SPECTRUM_PRESET_BALANCED,
+    SPECTRUM_PRESET_AGGRESSIVE,
+    SPECTRUM_PRESET_CUSTOM,
+]
+
 
 @dataclass
 class RuntimeState:
@@ -118,6 +129,17 @@ class RuntimeState:
     teacache_force_full_interval: int = 0
     teacache_dry_run: bool = False
     teacache_verbose_trace: bool = False
+    spectrum_enabled: bool = False
+    spectrum_preset: str = SPECTRUM_PRESET_BALANCED
+    spectrum_w: float = 0.20
+    spectrum_m: int = 16
+    spectrum_lambda: float = 0.50
+    spectrum_warmup_steps: int = 6
+    spectrum_window_size: int = 2
+    spectrum_flex_window: float = 0.0
+    spectrum_stop_progress: float = 0.80
+    spectrum_dry_run: bool = False
+    spectrum_verbose_trace: bool = False
     status: str = "disabled"
     error_message: str | None = None
     model_detection: Any | None = None
@@ -168,6 +190,14 @@ class RuntimeState:
     teacache_logged_calls: int = 0
     teacache_num_blocks: int | None = None
     teacache_unavailable_reason: str | None = None
+    spectrum_model_calls: int = 0
+    spectrum_actual_forwards: int = 0
+    spectrum_forecasts: int = 0
+    spectrum_dry_run_forecasts: int = 0
+    spectrum_fallbacks: int = 0
+    spectrum_errors: int = 0
+    spectrum_logged_calls: int = 0
+    spectrum_unavailable_reason: str | None = None
     generation_logged: bool = False
     generation_start_source: str | None = None
     patches: dict[str, Any] = field(default_factory=dict)
@@ -226,6 +256,17 @@ class RuntimeState:
         teacache_force_full_interval: int = 0,
         teacache_dry_run: bool = False,
         teacache_verbose_trace: bool = False,
+        spectrum_enabled: bool = False,
+        spectrum_preset: str = SPECTRUM_PRESET_BALANCED,
+        spectrum_w: float = 0.20,
+        spectrum_m: int = 16,
+        spectrum_lambda: float = 0.50,
+        spectrum_warmup_steps: int = 6,
+        spectrum_window_size: int = 2,
+        spectrum_flex_window: float = 0.0,
+        spectrum_stop_progress: float = 0.80,
+        spectrum_dry_run: bool = False,
+        spectrum_verbose_trace: bool = False,
     ) -> None:
         self.enabled = bool(enabled)
         self.mode = mode if mode in MODES else MODE_OFF
@@ -279,6 +320,22 @@ class RuntimeState:
         self.teacache_dry_run = bool(teacache_dry_run)
         self.teacache_verbose_trace = bool(teacache_verbose_trace)
         self._apply_teacache_preset()
+        self.spectrum_enabled = bool(spectrum_enabled)
+        if self.teacache_enabled and self.spectrum_enabled:
+            self.spectrum_enabled = False
+        self.spectrum_preset = (
+            spectrum_preset if spectrum_preset in SPECTRUM_PRESETS else SPECTRUM_PRESET_BALANCED
+        )
+        self.spectrum_w = _clamp_float(spectrum_w, 0.0, 1.0)
+        self.spectrum_m = _clamp_int(spectrum_m, 1, 32)
+        self.spectrum_lambda = _clamp_float(spectrum_lambda, 0.0, 100.0)
+        self.spectrum_warmup_steps = _clamp_int(spectrum_warmup_steps, 0, 50)
+        self.spectrum_window_size = _clamp_int(spectrum_window_size, 1, 64)
+        self.spectrum_flex_window = _clamp_float(spectrum_flex_window, 0.0, 2.0)
+        self.spectrum_stop_progress = _clamp_float(spectrum_stop_progress, 0.0, 1.0)
+        self.spectrum_dry_run = bool(spectrum_dry_run)
+        self.spectrum_verbose_trace = bool(spectrum_verbose_trace)
+        self._apply_spectrum_preset()
         if self.sparse_block_start > self.sparse_block_end:
             self.sparse_block_start, self.sparse_block_end = (
                 self.sparse_block_end,
@@ -301,6 +358,7 @@ class RuntimeState:
             or self.attention_override_active()
             or self.sparse_enabled
             or self.teacache_enabled
+            or self.spectrum_enabled
             or self.cond_uncond_enabled
             or self.lowbit_enabled
             or self.compile_enabled
@@ -311,6 +369,7 @@ class RuntimeState:
             self.attention_override_active()
             or self.sparse_enabled
             or self.teacache_enabled
+            or self.spectrum_enabled
             or self.cond_uncond_enabled
             or self.lowbit_enabled
             or self.compile_enabled
@@ -330,6 +389,34 @@ class RuntimeState:
             self.teacache_threshold = 0.07
         self.teacache_start_percent = 0.05
         self.teacache_end_percent = 0.95
+
+    def _apply_spectrum_preset(self) -> None:
+        if self.spectrum_preset == SPECTRUM_PRESET_CUSTOM:
+            return
+        if self.spectrum_preset == SPECTRUM_PRESET_SAFE:
+            self.spectrum_w = 0.20
+            self.spectrum_m = 8
+            self.spectrum_lambda = 0.50
+            self.spectrum_warmup_steps = 8
+            self.spectrum_window_size = 2
+            self.spectrum_flex_window = 0.0
+            self.spectrum_stop_progress = 0.80
+        elif self.spectrum_preset == SPECTRUM_PRESET_AGGRESSIVE:
+            self.spectrum_w = 0.30
+            self.spectrum_m = 16
+            self.spectrum_lambda = 0.50
+            self.spectrum_warmup_steps = 6
+            self.spectrum_window_size = 2
+            self.spectrum_flex_window = 0.0
+            self.spectrum_stop_progress = 0.90
+        else:
+            self.spectrum_w = 0.20
+            self.spectrum_m = 16
+            self.spectrum_lambda = 0.50
+            self.spectrum_warmup_steps = 6
+            self.spectrum_window_size = 2
+            self.spectrum_flex_window = 0.0
+            self.spectrum_stop_progress = 0.80
 
     def reset_generation(self, source: str = "unknown") -> None:
         self.generation_index += 1
@@ -379,6 +466,14 @@ class RuntimeState:
         self.teacache_logged_calls = 0
         self.teacache_num_blocks = None
         self.teacache_unavailable_reason = None
+        self.spectrum_model_calls = 0
+        self.spectrum_actual_forwards = 0
+        self.spectrum_forecasts = 0
+        self.spectrum_dry_run_forecasts = 0
+        self.spectrum_fallbacks = 0
+        self.spectrum_errors = 0
+        self.spectrum_logged_calls = 0
+        self.spectrum_unavailable_reason = None
         self.generation_logged = False
         self.error_message = None
         if not self.enabled:
@@ -387,6 +482,8 @@ class RuntimeState:
             self.status = "identity-patch"
         elif self.teacache_enabled:
             self.status = "experimental-teacache"
+        elif self.spectrum_enabled:
+            self.status = "experimental-spectrum"
         elif self.attention_override_active():
             self.status = "experimental-attention"
         elif self.sparse_enabled:
