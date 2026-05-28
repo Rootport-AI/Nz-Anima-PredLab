@@ -216,6 +216,12 @@ nzap_mode
 - UI の選択値は生成開始時に snapshot し、生成中に UI を変更しても進行中の batch へは反映しない。
 - 画像生成に影響する実験が有効な場合は、生成ログへ設定 snapshot を出す。
 
+機能追加時の相互排他ルール:
+
+- 新しい機能を実装するときは、それが既存の機能と相互排他かどうかを必ず検討する。
+- 同時に `Enable` にした場合に server crash、CUDA error、tensor shape corruption、unrecoverable patch conflict などの深刻な問題を起こす可能性がある組み合わせは、UI または生成開始時の設定処理で同時に `Enable` にできないようにする。
+- 生成画像が大きく崩れる、品質劣化が増える、速度が落ちる、結果が比較しにくくなる程度の「非推奨」組み合わせは、原理的に実行可能であれば同時に `Enable` にできてもよい。その場合はログやUI表示で実験的・非推奨であることが分かるようにする。
+
 #### Attention kernel controls
 
 目的:
