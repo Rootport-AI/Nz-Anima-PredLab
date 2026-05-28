@@ -111,7 +111,7 @@ class Script(scripts.Script):
                 teacache_threshold = gr.Slider(
                     label="Rel L1 threshold",
                     minimum=0.0,
-                    maximum=0.3,
+                    maximum=1.0,
                     step=0.005,
                     value=0.07,
                     elem_id="nzap-teacache-threshold",

@@ -258,7 +258,7 @@ class RuntimeState:
         self.teacache_preset = (
             teacache_preset if teacache_preset in TEACACHE_PRESETS else TEACACHE_PRESET_BALANCED
         )
-        self.teacache_threshold = _clamp_float(teacache_threshold, 0.0, 0.3)
+        self.teacache_threshold = _clamp_float(teacache_threshold, 0.0, 1.0)
         self.teacache_start_percent = _clamp_float(teacache_start_percent, 0.0, 1.0)
         self.teacache_end_percent = _clamp_float(teacache_end_percent, 0.0, 1.0)
         self.teacache_cache_device = (

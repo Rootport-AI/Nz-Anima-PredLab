@@ -814,9 +814,6 @@ def _teacache_forward_body(
     import torch
 
     transformer_options = kwargs.get("transformer_options", {}) or {}
-    unsupported_kwargs = sorted(set(kwargs) - {"transformer_options"})
-    if unsupported_kwargs:
-        raise RuntimeError(f"unsupported Anima._forward kwargs for TeaCache: {unsupported_kwargs}")
     cond_or_uncond = _teacache_cond_or_uncond(transformer_options.get("cond_or_uncond"))
     if not cond_or_uncond:
         raise RuntimeError("transformer_options.cond_or_uncond is missing")

@@ -264,7 +264,7 @@ UI:
 | --- | --- | --- | --- |
 | `Enable TeaCache experiment` | checkbox | `False` | Forge Neo 本体に存在しない Nz-Anima-PredLab 実験機能。 |
 | `TeaCache preset` | dropdown / segmented radio | `Balanced` | 候補: `Safe` / `Balanced` / `Aggressive` / `Custom`。preset は下記パラメータの初期値をまとめて選ぶ。 |
-| `Rel L1 threshold` | slider / number | `0.070` | 主要 tradeoff。Anima 30〜32 step では `0.06..0.07` を安全寄りの初期検証範囲とし、`0.08` 以上は品質劣化リスクが高い実験域として扱う。 |
+| `Rel L1 threshold` | slider / number | `0.070` | 主要 tradeoff。Anima 30〜32 step では `0.06..0.07` を安全寄りの初期検証範囲とし、`0.08` 以上は品質劣化リスクが高い実験域として扱う。破壊的な動作確認用に UI 上限は `1.0` とする。 |
 | `Start percent` | slider | `0.05` | TeaCache 判定を開始する sampling 進行率。32 step ではおおむね step 1〜2 以降に相当する。 |
 | `End percent` | slider | `0.95` | TeaCache 判定を終了する sampling 進行率。終盤の細部を守るため、最後の数 step は full calculation に戻せるようにする。 |
 | `Cache device` | radio | `cuda` | 候補: `cuda` / `cpu`。`cuda` は高速寄りで VRAM を少し使う。`cpu` はVRAM節約用だが転送で遅くなる可能性がある。 |
