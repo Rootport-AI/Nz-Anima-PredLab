@@ -206,7 +206,7 @@ nzap_mode
 
 基本原則:
 
-- UI は top-level の `Nz-Anima-PredLab` Accordion を1つだけ持つ。現行実装ではその配下に `Attention` / `TeaCache` / `2D Sparse` / `Cond / Uncond` / `Low-bit / Compile` のサブ Accordion を置く。`Diagnostics` 専用 Accordion は現行実装にはなく、基本項目と `Debug log mode` / `Verbose diagnose log` で診断を制御する。
+- UI は top-level の `Nz-Anima-PredLab` Accordion を1つだけ持つ。現行実装ではその配下に `Attention` / `TeaCache` / `Spectrum` / `2D Sparse` / `Cond / Uncond` / `Low-bit / Compile` のサブ Accordion を置く。`Diagnostics` 専用 Accordion は現行実装にはなく、基本項目と `Debug log mode` / `Verbose diagnose log` で診断を制御する。
 - 他拡張と同じ階層に Nz-Anima-PredLab 用の top-level Accordion を複数作らない。
 - すべての項目の初期状態は Forge Neo 本体の挙動と一致させる。
 - Forge Neo 本体に既に存在する選択肢は、Nz-Anima-PredLab 側でも本体の現在値を初期値として表示する。
@@ -221,6 +221,7 @@ nzap_mode
 - 新しい機能を実装するときは、それが既存の機能と相互排他かどうかを必ず検討する。
 - 同時に `Enable` にした場合に server crash、CUDA error、tensor shape corruption、unrecoverable patch conflict などの深刻な問題を起こす可能性がある組み合わせは、UI または生成開始時の設定処理で同時に `Enable` にできないようにする。
 - 生成画像が大きく崩れる、品質劣化が増える、速度が落ちる、結果が比較しにくくなる程度の「非推奨」組み合わせは、原理的に実行可能であれば同時に `Enable` にできてもよい。その場合はログやUI表示で実験的・非推奨であることが分かるようにする。
+- `TeaCache` と `Spectrum` はどちらも step 単位で denoiser 計算を省略する実験であり、同時有効化は結果の原因切り分けを困難にするため UI 上で相互排他にする。`Enable TeaCache experiment=True` にしたら `Enable Spectrum experiment=False` にし、`Enable Spectrum experiment=True` にしたら `Enable TeaCache experiment=False` にする。
 
 #### Attention kernel controls
 
@@ -317,6 +318,73 @@ rmse=0.03206983196972507
 
 32 step で使う場合も初期実験では同 profile を使ってよいが、ログには `profile_steps=30 runtime_steps=32` を出して、厳密には32 step用に再校正されていないことを分かるようにする。
 
+#### Spectrum / spectral feature forecasting controls
+
+目的:
+
+- Anima base v1.0 の通常 step 数を維持したまま、Spectrum による denoiser 出力予測で推論時間短縮を狙う。
+- SDXL 向けの一般設定ではなく、Anima base v1.0 で出力変化を抑えることを優先した実験機能として扱う。
+- Spectrum は training-free の spectral feature forecasting であり、Chebyshev 多項式と ridge regression によって過去 step の特徴推移から将来 step を予測する。
+
+参考実装:
+
+- `hanjq17/Spectrum`
+- `AdamNizol/ComfyUI-Anima-Enhancer`
+- Forge Neo built-in `sd_forge_spectrum`
+
+適用方針:
+
+- 初期ターゲットは Anima base v1.0 とする。
+- ただし、Anima base v1.0 以外であることだけを理由に Spectrum を禁止したり、警告ログを出したりしない。
+- Anima 向けに調整した preset を提供するが、他モデルで動かすかどうかはユーザーの実験範囲とする。
+- patch point、tensor shape、dtype/device、既存 wrapper などの実行条件が合わない場合のみ、通常の安全 fallback として Forge baseline へ戻す。
+
+UI:
+
+| Control | UI type | Default | Notes |
+| --- | --- | --- | --- |
+| `Enable Spectrum experiment` | checkbox | `False` | Forge Neo 本体の `Spectrum Integrated` とは別の、Nz-Anima-PredLab 管理下の実験機能。 |
+| `Spectrum preset` | dropdown / segmented radio | `Balanced` | 候補: `Safe` / `Balanced` / `Aggressive` / `Custom`。preset は下記パラメータの初期値をまとめて選ぶ。 |
+| `Prediction weighting` (`w`) | slider / number | `0.20` | Chebyshev 予測と短期 Taylor 補間の blend。Anima 向け初期値は ComfyUI-Anima-Enhancer の推奨範囲 `0.2..0.3` を優先する。 |
+| `Polynomial degree` (`m`) | slider / number | `16` | Chebyshev basis の次数。Anima 向け先行事例の `8..16` を重視し、UI 範囲は `1..32` とする。 |
+| `Ridge lambda` | slider / number | `0.50` | ridge regression の正則化。初期 preset では `0.50` に固定する。 |
+| `Warmup steps` | slider / number | `6` | Spectrum 予測を開始する前に full denoiser を実行する step 数。 |
+| `Window size` | slider / number | `2` | actual forward と forecast の間隔。初期 preset では `2` に固定する。 |
+| `Flex window` | slider / number | `0.00` | actual forward 後に window を広げる量。Anima base v1.0 では出力変化抑制を優先し、初期 preset では `0.00` に固定する。 |
+| `Stop progress` | slider | `0.80` | 進行率がこの値を超えたら forecast を止め、終盤を full denoiser に戻す。 |
+| `Dry-run Spectrum decisions only` | checkbox | `False` | 実際には forecast せず、actual/forecast 判定だけをログに出す。初期実装・安全確認用。 |
+| `Verbose Spectrum trace` | checkbox | `False` | call ごとの decision / reason / window / history を出す。通常は summary のみ。 |
+
+Preset:
+
+| Preset | w | m | lambda | warmup | window | flex | stop | Notes |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `Safe` | `0.20` | `8` | `0.50` | `8` | `2` | `0.00` | `0.80` | 出力変化を最小化する検証開始値。 |
+| `Balanced` | `0.20` | `16` | `0.50` | `6` | `2` | `0.00` | `0.80` | ComfyUI-Anima-Enhancer 寄りの初期 default。 |
+| `Aggressive` | `0.30` | `16` | `0.50` | `6` | `2` | `0.00` | `0.90` | 速度寄り。終盤 guard を遅らせるため、出力変化は増え得る。 |
+| `Custom` | UI値を保持 | UI値を保持 | UI値を保持 | UI値を保持 | UI値を保持 | UI値を保持 | UI値を保持 | 個別調整用。 |
+
+UI behavior:
+
+- `Spectrum preset` で `Safe` / `Balanced` / `Aggressive` を選ぶと、`w` / `m` / `lambda` / `warmup` / `window` / `flex` / `stop` はその preset の値へ自動更新する。
+- `w` / `m` / `lambda` / `warmup` / `window` / `flex` / `stop` のいずれかを手動で変更した場合、`Spectrum preset` は自動的に `Custom` へ切り替わる。
+- `Custom` を選んだ場合は既存の slider 値を維持する。
+- `Enable Spectrum experiment=True` にした場合は、UI callback で `Enable TeaCache experiment=False` にする。
+- `Enable TeaCache experiment=True` にした場合は、UI callback で `Enable Spectrum experiment=False` にする。
+- 古い `ui-config.json` や外部 API 操作などで生成開始時 snapshot が両方 `True` になっていた場合は、実行時の保険としてどちらか片方だけを有効に正規化する。初期実装では既存の TeaCache 優先に合わせ、`TeaCache=True` / `Spectrum=False` として扱う。
+
+必須動作:
+
+- generation の最初の model call は必ず actual forward にする。
+- `Warmup steps` 内は必ず actual forward にする。
+- `Stop progress` 以降は必ず actual forward にする。
+- forecaster history が空、または予測に必要な履歴が不足している場合は actual forward にする。
+- shape / dtype / device が前回履歴と一致しない場合は forecaster state を reset し、actual forward に戻す。
+- forecast 結果に NaN / Inf を検出した場合は forecast を破棄し、actual forward に戻す。
+- `Dry-run Spectrum decisions only=True` の場合は、forecast 条件を満たしても actual forward を行い、decision counter だけを更新する。
+- Spectrum state は generation 開始時、model reload、OFF、unload、timestep 巻き戻り検出時に破棄する。
+- 初期実装では cond/uncond を複雑に分割せず、Forge Neo が渡す batched model output をそのまま forecaster の対象にする。batch shape や cond/uncond 構造が変化した場合は shape mismatch として reset / actual forward に戻す。
+
 #### 2D sparse attention / NATTEN controls
 
 目的:
@@ -393,10 +461,11 @@ UI:
 高速化実験の優先順位:
 
 1. `TeaCache / residual cache experiment`
-2. `Experimental 2D sparse attention`
-3. `Compile / low-bit experiment`
-4. `Fast attention kernel`
-5. `Cond/uncond optimization`
+2. `Spectrum / spectral feature forecasting experiment`
+3. `Experimental 2D sparse attention`
+4. `Compile / low-bit experiment`
+5. `Fast attention kernel`
+6. `Cond/uncond optimization`
 
 理由:
 
@@ -405,6 +474,7 @@ UI:
 - `attention_sage` / `attention_flash` の差し替え実験では拡張側 wrapper が全 attention call を捕捉できたが、対象環境では `attention_sage` が既に有効で、backend 差し替えによる追加高速化余地は限定的だった。
 - TeaCache は attention kernel の置換ではなく、Anima block 列を step 単位で skip して residual を再利用するため、既存 attention backend と併用できる可能性がある。
 - `daraskme/comfy_anima_tea_cache` の Anima 30 step 検証では、`rel_l1_thresh=0.06..0.07` 付近で品質劣化を抑えつつ約 7〜14% の高速化が観測されている。
+- Spectrum は Forge Neo の汎用 model wrapper hook で denoiser output を予測できるため、Anima base v1.0 向け高速化の有力候補として TeaCache の次に優先する。ただし TeaCache とは同時に有効化しない。
 - 実測では CFG>1 の cond/uncond は `cond_or_uncond=[1, 0]`、`input_shape=2x16x1x192x192` として同一 model call に batch されていた。
 - そのため、cond/uncond 最適化は高速化の本命ではない。ただし検証項目として維持する。
 - CFG=1.0、negative prompt空、batch size > 1、複数prompt、特殊拡張併用時の挙動は未検証として残す。
@@ -521,7 +591,9 @@ reason: str
 - 判定 evidence が不足している
 - SDXL / Flux / Z-Image / Wan / Qwen / Chroma など別モデルと判断できる
 
-非対応モデルでは、警告ログのみを出し、処理は変更しない。同一モデル・同一 session では警告を出しすぎないようにする。
+非対応モデルでは、Anima 固有 patch point を必要とする実験は適用しない。通常生成ごとに警告ログだけを出すことは避け、診断モードまたは明示的な実験適用時に必要最小限の理由を記録する。
+
+Spectrum のように Forge Neo の汎用 model wrapper hook で動作し得る実験は、Anima base v1.0 向け preset を持っていても、モデル family が Anima ではないことだけを理由に禁止しない。実行に必要な hook や tensor 条件が合わない場合のみ fallback する。
 
 ## 10. 診断仕様
 
@@ -684,6 +756,42 @@ Verbose trace でのみ出す項目:
 - `Dry-run TeaCache decisions only` で画像を変えずに閾値の挙動を確認する。
 - `rel_l1_thresh` の差による skip rate と品質劣化の関係を手動比較できるようにする。
 
+### 10.7 Spectrum trace
+
+出力項目:
+
+- Spectrum enabled / dry-run / preset
+- `w`
+- `m`
+- `lambda`
+- warmup steps
+- window size
+- flex window
+- stop progress
+- total model calls
+- actual forward count
+- forecast count
+- forecast rate
+- fallback count
+- error count
+
+Verbose trace でのみ出す項目:
+
+- call index
+- step index
+- current progress
+- decision: `actual` / `forecast`
+- reason: `first_call` / `warmup` / `tail_guard` / `window` / `no_history` / `dry_run` / `shape_mismatch` / `nan_inf` / `fallback`
+- history length
+- current window
+
+診断目的:
+
+- 初回 model call と warmup 範囲が必ず actual forward になっているか確認する。
+- forecast が何 call 発生したか確認する。
+- `Dry-run Spectrum decisions only` で画像を変えずに予測スケジュールを確認する。
+- `Safe` / `Balanced` / `Aggressive` preset の速度差と出力変化を手動比較できるようにする。
+
 ## 11. Runtime artifacts
 
 初期診断版ではファイル出力を必須にしない。
@@ -709,7 +817,7 @@ Verbose trace でのみ出す項目:
 
 ## 12. Patch 仕様
 
-現行実装は診断機能に加えて、実機検証用の `Identity patch test`、attention backend 差し替え、2D sparse attention 実験 patch、TeaCache / residual cache 実験 patch の足場を持つ。
+現行実装は診断機能に加えて、実機検証用の `Identity patch test`、attention backend 差し替え、2D sparse attention 実験 patch、TeaCache / residual cache 実験 patch の足場を持つ。Spectrum は Anima base v1.0 向けの次期実験として仕様確定済みだが、この時点では未実装とする。
 
 `Identity patch test` では `backend.nn.anima.Block.forward` を Nz-Anima-PredLab の wrapper に差し替え、wrapper 内で元の `Block.forward` をそのまま呼ぶ。これは高速化ではなく、Forge Neo 本体の推論パイプラインの一部を拡張側から安全に迂回・復帰できるかを確認するための検証である。
 
@@ -751,6 +859,7 @@ patch 候補:
 - `backend.nn.anima.SelfCrossAttention.compute_attention`
 - `backend.nn.anima.SelfCrossAttention.torch_attention_op`
 - `backend.attention.attention_function`
+- Forge Neo `ModelPatcher.model_options["model_function_wrapper"]`
 
 現行実装済み patch:
 
@@ -762,6 +871,7 @@ patch 候補:
 
 未実装 patch:
 
+- `spectrum`
 - `lowbit`
 - `compile`
 - `cond_uncond_optimization`
@@ -781,13 +891,26 @@ TeaCache patch の基本挙動:
 - `Dry-run TeaCache decisions only` では、skip 判定と summary counter は計算するが、実際の block skip は行わない。
 - patch 適用・解除は `patcher.py` の通常 patch 管理に統合し、OFF / unload / unsupported model で必ず復元する。
 
+Spectrum patch の基本挙動:
+
+- 初期実装では Forge Neo の `ModelPatcher.set_model_unet_function_wrapper()` 相当の wrapper を使い、model output tensor を forecaster の対象にする。
+- actual forward 時は元の `model_function` を通常通り実行し、その出力を `FastChebyshevForecaster` へ保存する。
+- forecast 時は元の `model_function` を呼ばず、Chebyshev ridge regression と短期 Taylor 補間の blend で model output を予測する。
+- `w` は Chebyshev 予測の重みとして扱い、`1-w` 側を短期 Taylor 補間として扱う。
+- forecast 結果は元出力と同じ shape / dtype / device に戻す。
+- `Dry-run Spectrum decisions only` では、forecast 判定と summary counter は計算するが、実際の forecast 出力は使わない。
+- Forge Neo built-in `Spectrum Integrated` など、既に別の Spectrum 系 `model_function_wrapper` が存在すると判断できる場合、Nz-Anima-PredLab 側の Spectrum は重ね掛けしない。
+- 既存 wrapper が存在する場合の扱いは実装時に慎重に決める。初期実装では、安全に chain できない wrapper を検出した場合は Nz Spectrum を適用せず baseline へ戻す。
+- patch 適用・解除は `patcher.py` の通常 patch 管理に統合し、OFF / unload / 例外時に必ず復元する。
+
 patch 優先順位:
 
-1. `Anima._forward` または `Anima.forward` 付近での TeaCache / residual cache 実験。
-2. H/W/T 情報を保持できる `Block.forward` / `SelfCrossAttention` 付近での2D sparse attention実験。
-3. Forge Neoの低bit・compile機能をAnimaへ適用するためのmodel load / operation選択調査。
-4. attention backend差し替え。実測ではSageAttentionが既に使われているため優先度は中から低。
-5. cond/uncond最適化。実測で通常CFG>1は同一forward batch化済みのため優先度は低いが、未検証条件の確認項目として維持する。
+1. `Identity patch test`。診断用であり、他の experimental patch と同時に使わない。
+2. `TeaCache / residual cache experiment` または `Spectrum / spectral feature forecasting experiment`。両者は UI 相互排他により同時適用しない。
+3. H/W/T 情報を保持できる `Block.forward` / `SelfCrossAttention` 付近での2D sparse attention実験。
+4. Forge Neoの低bit・compile機能をAnimaへ適用するためのmodel load / operation選択調査。
+5. attention backend差し替え。実測ではSageAttentionが既に使われているため優先度は中から低。
+6. cond/uncond最適化。実測で通常CFG>1は同一forward batch化済みのため優先度は低いが、未検証条件の確認項目として維持する。
 
 ## 13. Safety
 
@@ -795,12 +918,13 @@ patch 優先順位:
 
 - `Enable Nz-Anima-PredLab` が false
 - `Debug log mode` が `Off` で、すべての実験機能が baseline / disabled
-- model detection が unsupported
+- model detection が unsupported で、かつ対象 experimental patch が Anima 固有 patch point を必要とする
 - txt2img 以外
 - img2img / Hires.fix / ControlNet / IP-Adapter / 参照画像系拡張が有効と判断できる
 - patch 対象関数が見つからない
 - patch 対象関数の signature が想定と異なる
 - TeaCache で必要な `cond_or_uncond` / sampling step / sigmas / transformer_options が取得できない
+- Spectrum で必要な model function wrapper hook、sampling step、出力 tensor が取得できない
 
 以下の場合は patch を解除して fallback する:
 
@@ -808,6 +932,7 @@ patch 優先順位:
 - 出力 tensor shape が想定と異なる
 - NaN / Inf を検出した場合
 - TeaCache residual の shape / dtype / device が現在の hidden state と一致しない場合
+- Spectrum forecast の shape / dtype / device が現在の model output と一致しない場合
 - ユーザーが `Debug log mode` を Off にし、該当する実験機能も baseline / disabled にした場合
 - script unload
 
@@ -819,7 +944,18 @@ TeaCache 固有の安全条件:
 - `Max skip streak` が設定されている場合、連続 skip が上限に達した次の候補 step は full calculation にする。
 - `Force full calc interval` が設定されている場合、該当 interval の step は full calculation にする。
 - coefficient profile と runtime steps が一致しない場合はログへ警告を出す。ただし初期実験では `30step` profile を `32step` 実験に使うことは許可する。
+- TeaCache と Spectrum の同時有効化は UI で防止する。生成開始時 snapshot が両方 `True` の場合は実行時の保険として片方だけを有効に正規化する。
 - TeaCache と 2D sparse attention の同時有効化は初期実装では禁止または degraded 扱いとする。両方が有効な場合は TeaCache を無効化するか、明示的な優先順位に従って片方だけ適用する。
+
+Spectrum 固有の安全条件:
+
+- 初回 model call は必ず actual forward にする。
+- `Warmup steps` 内は必ず actual forward にする。
+- `Stop progress` 以降は必ず actual forward にする。
+- forecaster history が空または不足している状態では forecast しない。
+- shape / dtype / device mismatch、NaN / Inf、timestep 巻き戻り、batch shape 変化を検出した場合は forecaster state を reset し、actual forward に戻す。
+- Anima base v1.0 以外であることだけを理由に、Spectrum を禁止したり警告ログを出したりしない。実行に必要な hook や tensor 条件が合わない場合のみ fallback する。
+- Forge Neo built-in Spectrum など別の Spectrum 系 wrapper との二重適用は避ける。
 
 例外処理:
 
@@ -876,6 +1012,14 @@ TeaCache experiment:
 [Nz-Anima-PredLab] teacache_summary=model_calls=32 full_calcs=28 skips=4 dry_run_skips=0 skip_rate=0.125 first_full_calcs=1 forced_full_calcs=0 fallbacks=0 errors=0 num_blocks=28 active=True dry_run=False unavailable_reason=None
 ```
 
+Spectrum experiment:
+
+```text
+[Nz-Anima-PredLab] spectrum_config=enabled=True preset=Balanced w=0.20 m=16 lambda=0.50 warmup=6 window=2 flex=0.00 stop_progress=0.80 dry_run=False
+[Nz-Anima-PredLab] spectrum_call=call=1 step=0 progress=0.000 decision=actual reason=first_call history=0 window=2 dry_run=False
+[Nz-Anima-PredLab] spectrum_summary=model_calls=32 actual_forwards=24 forecasts=8 forecast_rate=0.250 fallbacks=0 errors=0 active=True dry_run=False unavailable_reason=None
+```
+
 ## 15. Packaging / compatibility
 
 対象:
@@ -890,6 +1034,7 @@ README に明記する項目:
 - インストール手順。
 - 現行版は診断・計測を主目的としつつ、実験機能として identity patch、attention backend差し替え、2D sparse attention の patch 足場を含むこと。
 - TeaCache は実験機能として実装済みだが、品質・速度・skip率は環境ごとの実機検証が必要であること。
+- Spectrum は Anima base v1.0 向けの次期実験機能として仕様確定済みだが、現時点では未実装であること。
 - トラブルシュート: 拡張が表示されない、unsupported model になる、ログが出ない、生成が遅くなった場合。
 
 ## 16. Acceptance Criteria
@@ -903,7 +1048,7 @@ README に明記する項目:
 - `scripts/nz_anima_predlab.py` が薄い entrypoint になっている。
 - callback 登録が多重実行されない。
 - import 時にモデル検査や GPU 処理を行わない。
-- unsupported model で処理変更が起きない。
+- unsupported model では Anima 固有 patch による処理変更が起きない。
 - supported model で model detection evidence を出力できる。
 - `Diagnose only` で total sampling time と average step time を出力できる。
 - `Diagnose only` で attention backend、uncond presence、CFG 関連情報、dtype / Forge ops 関連情報を一括出力できる。
@@ -921,6 +1066,7 @@ README に明記する項目:
 - すべての実験項目を off にした場合、Forge Neo baseline と同等の挙動になる。
 - Forge Neo 本体にない機能は `Enable ...` checkbox が off の状態を default とする。
 - Forge Neo 本体にある機能は、本体の current/default 値を UI 初期値として表示する。
+- 同時に有効化すべきでない実験は UI で相互排他にし、ユーザーがログを読まなくても望ましくない状態にならないようにする。
 - 画像が生成される。
 - 品質劣化が視覚的に許容範囲内である。
 - 1step 平均時間が 5% 以上短縮する。
@@ -936,6 +1082,20 @@ TeaCache 実験版の完了条件:
 - `rel_l1_thresh=0.060..0.070`、`start_percent=0.05`、`end_percent=0.95` の範囲で、32 step Anima生成がエラーなく完走する。
 - TeaCache で例外または不整合を検出した場合、full calculation または Forge baseline へfallbackし、WebUIの生成処理を止めない。
 
+Spectrum 実験版の完了条件:
+
+- `Enable Spectrum experiment=False` で Forge Neo baseline と同等の推論経路になる。
+- `Spectrum preset=Safe/Balanced/Aggressive` で、定義済みの `w` / `m` / `lambda` / `warmup` / `window` / `flex` / `stop` が UI に反映される。
+- Spectrum の各 numeric control を手動変更すると、`Spectrum preset` が `Custom` へ切り替わる。
+- `Enable Spectrum experiment=True` にすると `Enable TeaCache experiment=False` になり、`Enable TeaCache experiment=True` にすると `Enable Spectrum experiment=False` になる。
+- `Dry-run Spectrum decisions only=True` で画像内容を変更せず、actual/forecast 判定だけを summary / verbose trace へ出力できる。
+- generation の最初の model call と warmup 範囲が必ず actual forward として記録される。
+- `Stop progress` 以降が actual forward として記録される。
+- `spectrum_summary` で `actual_forwards`、`forecasts`、`forecast_rate`、`fallbacks`、`errors`、`active` を確認できる。
+- Anima base v1.0 / 30〜32 step の通常生成で `Balanced` preset がエラーなく完走する。
+- Anima base v1.0 以外であることだけを理由に、Spectrum を禁止したり警告ログを出したりしない。
+- Spectrum で例外または不整合を検出した場合、actual forward または Forge baseline へ fallback し、WebUI の生成処理を止めない。
+
 ## 17. Open Issues
 
 - Forge Neo の `torch.compile` 実装箇所を特定する。
@@ -947,6 +1107,9 @@ TeaCache 実験版の完了条件:
 - Forge Neo の Anima 実装で `Anima.forward` TeaCache patch が32 step生成をエラーなく完走し、期待どおり skip できるか確認する。
 - 30 step 用 TeaCache 係数を 32 step 実験へ使った場合の品質・skip率・速度を実機で確認し、必要なら32 step用係数を再校正する。
 - TeaCache と attention backend差し替え、2D sparse attention、low-bit / compile を同時に有効化した場合の優先順位を実機で確認する。
+- Spectrum の Forge Neo `model_function_wrapper` 実装で、Anima base v1.0 / 30〜32 step 生成がエラーなく完走し、ComfyUI-Anima-Enhancer 寄りの出力変化に収まるか確認する。
+- Spectrum の `m=8` と `m=16`、`stop_progress=0.80` と `0.90` の速度・出力変化を Anima base v1.0 で比較する。
+- Forge Neo built-in `Spectrum Integrated` が同時に有効な場合の検出方法と、Nz Spectrum を重ね掛けしないための fallback 条件を確認する。
 
 ## 18. 確定した仕様判断
 
@@ -959,7 +1122,7 @@ TeaCache 実験版の完了条件:
 - `Torch prototype` は高速化本命ではなく、NATTEN なしでも破綻するかを切り分けるための backend とする。
 - 実験結果はコンソール summary のみで確認する。JSON / CSV 保存は初期実装では行わない。
 - 画質比較は目視確認のみとする。baseline / patched pair の自動保存は初期実装では行わない。
-- 現行UIは top-level の `Nz-Anima-PredLab` Accordion 1つの配下に `Attention` / `2D Sparse` / `Cond / Uncond` / `Low-bit / Compile` のカテゴリ別サブ Accordion を置く。他拡張と同じ階層に Nz-Anima-PredLab 用 Accordion を複数作らない。
+- 現行UIは top-level の `Nz-Anima-PredLab` Accordion 1つの配下に `Attention` / `TeaCache` / `Spectrum` / `2D Sparse` / `Cond / Uncond` / `Low-bit / Compile` のカテゴリ別サブ Accordion を置く。他拡張と同じ階層に Nz-Anima-PredLab 用 Accordion を複数作らない。
 - low-bit / compile で model reload が必要な設定がある場合、自動 reload は行わない。UI またはログで「設定変更時にはモデルをリロードしてください」と知らせる。
 
 2026-05-27 時点で確定した TeaCache 仕様判断:
@@ -970,3 +1133,17 @@ TeaCache 実験版の完了条件:
 - 32 step 実験でも `start_percent=0.05` を default としてよい。ただし最初の model call / sampling step は必ず full calculation とし、cache 未初期化状態で skip しない。
 - `Dry-run TeaCache decisions only` を用意し、実装初期は画像を変えずにskip判定を観測できるようにする。
 - 初期実装では TeaCache summary はコンソールログのみとし、JSON / CSV保存は行わない。
+
+2026-05-28 時点で確定した Spectrum 仕様判断:
+
+- Spectrum は `Spectrum` サブ Accordion として追加する。Nz-Anima-PredLab 用の top-level Accordion は増やさない。
+- 初期ターゲットは Anima base v1.0 の推論高速化とする。
+- ただし Anima base v1.0 以外であることだけを理由に、Spectrum を禁止したり警告ログを出したりしない。
+- 実装方針と preset は Forge Neo built-in Spectrum の汎用 SDXL 寄り設定ではなく、ComfyUI-Anima-Enhancer の Anima 向け先行事例を優先する。
+- Spectrum preset は `Safe` / `Balanced` / `Aggressive` / `Custom` とする。
+- `Safe`: `w=0.20`、`m=8`、`lambda=0.50`、`warmup=8`、`window=2`、`flex=0.00`、`stop=0.80`。
+- `Balanced`: `w=0.20`、`m=16`、`lambda=0.50`、`warmup=6`、`window=2`、`flex=0.00`、`stop=0.80`。
+- `Aggressive`: `w=0.30`、`m=16`、`lambda=0.50`、`warmup=6`、`window=2`、`flex=0.00`、`stop=0.90`。
+- TeaCache と Spectrum は UI 上で相互排他にする。TeaCache を Enable にしたら Spectrum を disable にし、Spectrum を Enable にしたら TeaCache を disable にする。
+- 初期実装では `flex=0.25` のような window 拡張は preset に採用しない。Anima base v1.0 では速度より出力変化の少なさを優先する。
+- 初期実装では Spectrum summary はコンソールログのみとし、JSON / CSV保存は行わない。
