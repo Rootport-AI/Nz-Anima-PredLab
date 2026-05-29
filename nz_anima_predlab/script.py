@@ -51,27 +51,28 @@ class Script(scripts.Script):
 
     def ui(self, is_img2img):
         with gr.Accordion("Nz-Anima-PredLab", open=False, elem_id="nzap-panel"):
-            enabled = gr.Checkbox(
-                label="Enable Nz-Anima-PredLab",
-                value=_default_option("nzap_enable", False),
-                elem_id="nzap-enable",
-            )
-            mode = gr.Dropdown(
-                label="Debug log mode",
-                choices=MODES,
-                value=_default_option("nzap_mode", MODE_OFF),
-                elem_id="nzap-mode",
-            )
-            print_timing_log = gr.Checkbox(
-                label="Print timing log",
-                value=_default_option("nzap_print_timing_log", True),
-                elem_id="nzap-print-timing-log",
-            )
-            verbose_diagnose_log = gr.Checkbox(
-                label="Verbose diagnose log",
-                value=_default_option("nzap_verbose_diagnose_log", False),
-                elem_id="nzap-verbose-diagnose-log",
-            )
+            with gr.Accordion("Debug log mode", open=False, elem_id="nzap-debug-panel"):
+                enabled = gr.Checkbox(
+                    label="Enable",
+                    value=_default_option("nzap_enable", True),
+                    elem_id="nzap-enable",
+                )
+                mode = gr.Dropdown(
+                    label="Debug log",
+                    choices=MODES,
+                    value=_default_mode_option(),
+                    elem_id="nzap-mode",
+                )
+                print_timing_log = gr.Checkbox(
+                    label="Print timing log",
+                    value=_default_option("nzap_print_timing_log", True),
+                    elem_id="nzap-print-timing-log",
+                )
+                verbose_diagnose_log = gr.Checkbox(
+                    label="Verbose diagnose log",
+                    value=_default_option("nzap_verbose_diagnose_log", False),
+                    elem_id="nzap-verbose-diagnose-log",
+                )
             with gr.Accordion("Attention", open=False, elem_id="nzap-attention-panel"):
                 attention_backend = gr.Dropdown(
                     label="Attention backend",
@@ -637,6 +638,15 @@ def _default_option(key: str, default):
         return getattr(shared.opts, key, default)
     except Exception:
         return default
+
+
+def _default_mode_option() -> str:
+    mode = str(_default_option("nzap_mode", MODE_OFF) or MODE_OFF)
+    if mode == "Off":
+        return MODE_OFF
+    if mode == "Identity patch test":
+        return MODE_IDENTITY_PATCH
+    return mode if mode in MODES else MODE_OFF
 
 
 def _teacache_preset_updates(preset: str):

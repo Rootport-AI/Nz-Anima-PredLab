@@ -17,7 +17,7 @@ def on_ui_settings() -> None:
     add_option_once(
         "nzap_enable",
         shared.OptionInfo(
-            False,
+            True,
             "Enable Nz-Anima-PredLab",
             section=SECTION,
         ),

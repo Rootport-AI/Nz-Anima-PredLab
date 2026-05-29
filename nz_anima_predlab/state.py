@@ -5,9 +5,9 @@ from time import perf_counter
 from typing import Any
 
 
-MODE_OFF = "Off"
+MODE_OFF = ""
 MODE_DIAGNOSE = "Diagnose only"
-MODE_IDENTITY_PATCH = "Identity patch test"
+MODE_IDENTITY_PATCH = "Identity Patch test"
 MODE_TRACE_ATTENTION = "Trace attention"
 MODE_TRACE_COND = "Trace cond/uncond"
 MODE_TRACE_LOWBIT = "Trace low-bit / compile"
@@ -208,7 +208,7 @@ class RuntimeState:
 
             opts = shared.opts
             self.enabled = bool(getattr(opts, "nzap_enable", False))
-            self.mode = str(getattr(opts, "nzap_mode", MODE_OFF))
+            self.mode = _normalize_mode(getattr(opts, "nzap_mode", MODE_OFF))
             self.print_timing_log = bool(getattr(opts, "nzap_print_timing_log", True))
             self.verbose_diagnose_log = bool(
                 getattr(opts, "nzap_verbose_diagnose_log", False)
@@ -269,7 +269,7 @@ class RuntimeState:
         spectrum_verbose_trace: bool = False,
     ) -> None:
         self.enabled = bool(enabled)
-        self.mode = mode if mode in MODES else MODE_OFF
+        self.mode = _normalize_mode(mode)
         self.print_timing_log = bool(print_timing_log)
         self.verbose_diagnose_log = bool(verbose_diagnose_log)
         self.attention_backend = (
@@ -529,6 +529,15 @@ def _clamp_int(value: Any, minimum: int, maximum: int) -> int:
     except Exception:
         number = minimum
     return max(minimum, min(maximum, number))
+
+
+def _normalize_mode(value: Any) -> str:
+    mode = str(value or MODE_OFF)
+    if mode == "Off":
+        return MODE_OFF
+    if mode == "Identity patch test":
+        return MODE_IDENTITY_PATCH
+    return mode if mode in MODES else MODE_OFF
 
 
 def _clamp_float(value: Any, minimum: float, maximum: float) -> float:
