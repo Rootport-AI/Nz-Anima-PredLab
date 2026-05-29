@@ -68,16 +68,6 @@ class Script(scripts.Script):
                     value=_default_mode_option(),
                     elem_id="nzap-mode",
                 )
-                print_timing_log = gr.Checkbox(
-                    label="Print timing log",
-                    value=_default_option("nzap_print_timing_log", True),
-                    elem_id="nzap-print-timing-log",
-                )
-                verbose_diagnose_log = gr.Checkbox(
-                    label="Verbose diagnose log",
-                    value=_default_option("nzap_verbose_diagnose_log", False),
-                    elem_id="nzap-verbose-diagnose-log",
-                )
                 dump_teacache_residual = gr.Checkbox(
                     label="Dump TeaCache residual",
                     value=False,
@@ -102,6 +92,20 @@ class Script(scripts.Script):
                     label="Dump Spectrum final output",
                     value=False,
                     elem_id="nzap-dump-spectrum-final-output",
+                )
+                gr.HTML(
+                    '<div style="border-top: 3px solid var(--block-border-color, #4b5563); margin: 0.85rem 0 0.7rem;"></div>',
+                    elem_id="nzap-debug-dump-divider",
+                )
+                print_timing_log = gr.Checkbox(
+                    label="Print timing log",
+                    value=_default_option("nzap_print_timing_log", True),
+                    elem_id="nzap-print-timing-log",
+                )
+                verbose_diagnose_log = gr.Checkbox(
+                    label="Verbose diagnose log",
+                    value=_default_option("nzap_verbose_diagnose_log", False),
+                    elem_id="nzap-verbose-diagnose-log",
                 )
                 debug_log_enabled.change(
                     fn=_enable_parent_if_child_enabled,
