@@ -244,13 +244,10 @@ ToCaやSVD-Cache系の先行研究を踏まえると、tensor全体ではなく�
   Zarr
 
 軽量統計:
-  Parquet または CSV
+  Parquet 
 
 実験条件:
   meta.json
-
-小規模共有用:
-  safetensors
 ```
 
 ### 5.2 推奨ディレクトリ構成
@@ -286,18 +283,6 @@ anima_probe_run_001/
 - 巨大tensorを部分的に読める
 - step / block / tensor種別ごとに階層化しやすい
 - 圧縮をかけられる
-
-### 5.4 safetensorsの位置づけ
-
-`safetensors` は安全で高速なtensor保存形式だが、追記型ログや階層的な実験データベースにはZarrのほうが扱いやすい。
-
-`safetensors` は以下の用途に向く。
-
-```text
-- 有望候補の小規模dump
-- 再現用サンプル
-- 外部共有用
-```
 
 ---
 
