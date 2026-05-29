@@ -51,11 +51,16 @@ class Script(scripts.Script):
 
     def ui(self, is_img2img):
         with gr.Accordion("Nz-Anima-PredLab", open=False, elem_id="nzap-panel"):
+            enabled = gr.Checkbox(
+                label="Enable Nz-Anima-PredLab",
+                value=_default_option("nzap_enable", False),
+                elem_id="nzap-enable",
+            )
             with gr.Accordion("Debug log mode", open=False, elem_id="nzap-debug-panel"):
-                enabled = gr.Checkbox(
-                    label="Enable",
-                    value=_default_option("nzap_enable", True),
-                    elem_id="nzap-enable",
+                debug_log_enabled = gr.Checkbox(
+                    label="Enable debug log mode",
+                    value=_default_option("nzap_debug_log_enable", True),
+                    elem_id="nzap-debug-enable",
                 )
                 mode = gr.Dropdown(
                     label="Debug log",
@@ -73,7 +78,22 @@ class Script(scripts.Script):
                     value=_default_option("nzap_verbose_diagnose_log", False),
                     elem_id="nzap-verbose-diagnose-log",
                 )
+                debug_log_enabled.change(
+                    fn=_enable_parent_if_child_enabled,
+                    inputs=[debug_log_enabled],
+                    outputs=[enabled],
+                )
+                mode.change(
+                    fn=_debug_mode_selection_updates,
+                    inputs=[mode],
+                    outputs=[enabled, debug_log_enabled],
+                )
             with gr.Accordion("Attention", open=False, elem_id="nzap-attention-panel"):
+                attention_enabled = gr.Checkbox(
+                    label="Enable attention backend override",
+                    value=_default_option("nzap_attention_enable", False),
+                    elem_id="nzap-attention-enable",
+                )
                 attention_backend = gr.Dropdown(
                     label="Attention backend",
                     choices=ATTENTION_BACKENDS,
@@ -101,6 +121,11 @@ class Script(scripts.Script):
                     step=1,
                     value=27,
                     elem_id="nzap-attention-block-end",
+                )
+                attention_enabled.change(
+                    fn=_enable_parent_if_child_enabled,
+                    inputs=[attention_enabled],
+                    outputs=[enabled],
                 )
             with gr.Accordion("TeaCache", open=False, elem_id="nzap-teacache-panel"):
                 teacache_enabled = gr.Checkbox(
@@ -490,6 +515,8 @@ class Script(scripts.Script):
             spectrum_stop_progress,
             spectrum_dry_run,
             spectrum_verbose_trace,
+            debug_log_enabled,
+            attention_enabled,
         ]
 
     def process_before_every_sampling(self, p, *script_args, **kwargs):
@@ -508,6 +535,9 @@ class Script(scripts.Script):
 
 
 def _apply_ui_args(script_args) -> None:
+    if len(script_args) >= 48:
+        STATE.apply_options(*script_args[:48])
+        return
     if len(script_args) >= 46:
         STATE.apply_options(*script_args[:46])
         return
@@ -701,3 +731,14 @@ def _enable_parent_if_child_enabled(child_enabled: bool):
     if child_enabled:
         return True
     return gr.update()
+
+
+def _debug_mode_selection_updates(mode: str):
+    if _mode_selected(mode):
+        return True, True
+    return gr.update(), gr.update()
+
+
+def _mode_selected(mode: str) -> bool:
+    value = str(mode or MODE_OFF)
+    return value not in (MODE_OFF, "Off")

@@ -95,9 +95,11 @@ SPECTRUM_PRESETS = [
 @dataclass
 class RuntimeState:
     enabled: bool = False
+    debug_log_enabled: bool = True
     mode: str = MODE_OFF
     print_timing_log: bool = True
     verbose_diagnose_log: bool = False
+    attention_enabled: bool = False
     attention_backend: str = ATTENTION_BACKEND_CURRENT
     attention_target: str = ATTENTION_TARGET_BOTH
     attention_block_start: int = 0
@@ -208,7 +210,14 @@ class RuntimeState:
 
             opts = shared.opts
             self.enabled = bool(getattr(opts, "nzap_enable", False))
-            self.mode = _normalize_mode(getattr(opts, "nzap_mode", MODE_OFF))
+            self.debug_log_enabled = bool(
+                getattr(opts, "nzap_debug_log_enable", True)
+            )
+            self.mode = (
+                _normalize_mode(getattr(opts, "nzap_mode", MODE_OFF))
+                if self.debug_log_enabled
+                else MODE_OFF
+            )
             self.print_timing_log = bool(getattr(opts, "nzap_print_timing_log", True))
             self.verbose_diagnose_log = bool(
                 getattr(opts, "nzap_verbose_diagnose_log", False)
@@ -267,11 +276,19 @@ class RuntimeState:
         spectrum_stop_progress: float = 0.80,
         spectrum_dry_run: bool = False,
         spectrum_verbose_trace: bool = False,
+        debug_log_enabled: bool = True,
+        attention_enabled: bool | None = None,
     ) -> None:
         self.enabled = bool(enabled)
-        self.mode = _normalize_mode(mode)
+        self.debug_log_enabled = bool(debug_log_enabled)
+        self.mode = _normalize_mode(mode) if self.debug_log_enabled else MODE_OFF
         self.print_timing_log = bool(print_timing_log)
         self.verbose_diagnose_log = bool(verbose_diagnose_log)
+        self.attention_enabled = (
+            bool(attention_enabled)
+            if attention_enabled is not None
+            else attention_backend != ATTENTION_BACKEND_CURRENT
+        )
         self.attention_backend = (
             attention_backend if attention_backend in ATTENTION_BACKENDS else ATTENTION_BACKEND_CURRENT
         )
@@ -376,7 +393,7 @@ class RuntimeState:
         )
 
     def attention_override_active(self) -> bool:
-        return self.attention_backend != ATTENTION_BACKEND_CURRENT
+        return self.attention_enabled and self.attention_backend != ATTENTION_BACKEND_CURRENT
 
     def _apply_teacache_preset(self) -> None:
         if self.teacache_preset == TEACACHE_PRESET_CUSTOM:

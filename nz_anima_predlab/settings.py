@@ -17,8 +17,16 @@ def on_ui_settings() -> None:
     add_option_once(
         "nzap_enable",
         shared.OptionInfo(
-            True,
+            False,
             "Enable Nz-Anima-PredLab",
+            section=SECTION,
+        ),
+    )
+    add_option_once(
+        "nzap_debug_log_enable",
+        shared.OptionInfo(
+            True,
+            "Enable debug log mode",
             section=SECTION,
         ),
     )

@@ -15,6 +15,7 @@ from .model_detect import ModelDetection
 from .state import (
     MODE_DIAGNOSE,
     MODE_IDENTITY_PATCH,
+    MODE_OFF,
     SPARSE_BACKEND_NATTEN,
     STATE,
 )
@@ -184,7 +185,7 @@ def log_model_structure_trace() -> None:
 def log_cond_trace(params: Any) -> None:
     if not STATE.active():
         return
-    if STATE.mode == "Off":
+    if STATE.mode == MODE_OFF:
         return
     if STATE.cond_trace_logged and not STATE.verbose_diagnose_log:
         return
@@ -213,23 +214,35 @@ def log_cond_trace(params: Any) -> None:
 def log_timing_summary() -> None:
     if not STATE.active():
         return
-    if (
-        not STATE.print_timing_log
-        and STATE.mode not in (MODE_DIAGNOSE, MODE_IDENTITY_PATCH)
-        and not STATE.experimental_active()
-    ):
-        return
-    data = timing_summary()
-    total = data["total_sampling_time"]
-    avg = data["avg_step_time"]
-    min_step = data["min_step_time"]
-    max_step = data["max_step_time"]
-    info(
-        "denoiser_calls="
-        f"{data['denoiser_calls']} avg_step_time={_seconds(avg)} "
-        f"total_sampling_time={_seconds(total)} min_step_time={_seconds(min_step)} "
-        f"max_step_time={_seconds(max_step)} status={STATE.status}"
+    should_print_summaries = (
+        STATE.mode == MODE_IDENTITY_PATCH
+        or (
+            STATE.sparse_enabled
+            and not STATE.teacache_enabled
+            and not STATE.spectrum_enabled
+        )
+        or (
+            STATE.attention_override_active()
+            and not STATE.teacache_enabled
+            and (not STATE.sparse_enabled or STATE.spectrum_enabled)
+        )
+        or STATE.teacache_enabled
+        or (STATE.spectrum_enabled and not STATE.teacache_enabled)
     )
+    if not STATE.print_timing_log and not should_print_summaries:
+        return
+    if STATE.print_timing_log:
+        data = timing_summary()
+        total = data["total_sampling_time"]
+        avg = data["avg_step_time"]
+        min_step = data["min_step_time"]
+        max_step = data["max_step_time"]
+        info(
+            "denoiser_calls="
+            f"{data['denoiser_calls']} avg_step_time={_seconds(avg)} "
+            f"total_sampling_time={_seconds(total)} min_step_time={_seconds(min_step)} "
+            f"max_step_time={_seconds(max_step)} status={STATE.status}"
+        )
     if STATE.mode == MODE_IDENTITY_PATCH:
         try:
             from .patcher import is_patched

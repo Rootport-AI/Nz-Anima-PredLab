@@ -42,7 +42,7 @@
 
 - 拡張は `extensions/Nz-Anima-PredLab/` として実装する。
 - Forge Neo 本体のファイルは変更しない。
-- `Off` かつすべての個別 experimental control が baseline / disabled の場合は通常推論に影響を与えない。`Off` でも個別 experimental control が有効な場合は、該当実験を明示 opt-in として実行してよい。
+- `Debug log mode` が空欄、かつすべての個別 experimental control が baseline / disabled の場合は通常推論に影響を与えない。空欄でも個別 experimental control が有効な場合は、該当実験を明示 opt-in として実行してよい。
 - 診断モードでは画像生成結果を意図的に変更しない。
 - 高速化実験モードでは推論パイプラインを変更してよいが、画像が生成されること、かつ baseline から視覚的に大きく逸脱しないことを必須条件とする。
 - patch を行う場合は、元関数を保存し、OFF / unload / 例外時に復元できるようにする。
@@ -188,17 +188,17 @@ nzap_mode
 
 初期選択肢:
 
-- `Off`
+- ``
 - `Diagnose only`
-- `Identity patch test`
+- `Identity Patch test`
 
 現行実装では、実験機能ごとに mode を増やさず、AlwaysVisible panel 内の個別 control で切り替える。`Trace attention` / `Trace cond/uncond` / `Trace low-bit / compile` / `Experimental 2D sparse attention` / `Compile / low-bit experiment` / `Fast attention kernel` / `Cond/uncond optimization` は旧案または将来検討名であり、`nz_anima_predlab.state.MODES` には含めない。
 
 動作:
 
-- `Off`: debug mode としては明示的に無効。ただし、`Attention backend != Forge current/default`、`Enable 2D sparse attention=True` などの個別 experimental control が有効な場合は、`mode=Off` のままでも実験 patch は動作する。
+- 空欄: debug mode としては明示的に無効。ただし、`Enable attention backend override=True` かつ `Attention backend != Forge current/default`、`Enable 2D sparse attention=True` などの個別 experimental control が有効な場合は、debug mode が空欄のままでも実験 patch は動作する。
 - `Diagnose only`: 基本情報、timing、attention、low-bit / compile 関連情報を一括出力する。`Verbose diagnose log=True` かつ他の experimental patch が無効な場合は、`block_structure_trace` を適用して Anima block / qkv 構造も観測する。
-- `Identity patch test`: `backend.nn.anima.Block.forward` を Nz-Anima-PredLab の wrapper 経由に切り替え、元の Forge Neo 実装をそのまま呼び戻す。画像内容を変えず、推論パイプラインの一部を拡張側で捕捉できるかを実機検証する。
+- `Identity Patch test`: `backend.nn.anima.Block.forward` を Nz-Anima-PredLab の wrapper 経由に切り替え、元の Forge Neo 実装をそのまま呼び戻す。画像内容を変えず、推論パイプラインの一部を拡張側で捕捉できるかを実機検証する。
 
 ### 7.2.1 高速化実験 UI 方針
 
@@ -206,13 +206,13 @@ nzap_mode
 
 基本原則:
 
-- UI は top-level の `Nz-Anima-PredLab` Accordion を1つだけ持つ。現行実装ではその配下に `Attention` / `TeaCache` / `Spectrum` / `2D Sparse` / `Cond / Uncond` / `Low-bit / Compile` のサブ Accordion を置く。`Diagnostics` 専用 Accordion は現行実装にはなく、基本項目と `Debug log mode` / `Verbose diagnose log` で診断を制御する。
+- UI は top-level の `Nz-Anima-PredLab` Accordion を1つだけ持つ。現行実装ではその配下に `Debug log mode` / `Attention` / `TeaCache` / `Spectrum` / `2D Sparse` / `Cond / Uncond` / `Low-bit / Compile` のサブ Accordion を置く。`Debug log mode` 内の `Enable debug log mode` は debug dropdown の有効化だけを制御し、親の `Enable Nz-Anima-PredLab` とは別物として扱う。
 - 他拡張と同じ階層に Nz-Anima-PredLab 用の top-level Accordion を複数作らない。
 - すべての項目の初期状態は Forge Neo 本体の挙動と一致させる。
 - Forge Neo 本体に既に存在する選択肢は、Nz-Anima-PredLab 側でも本体の現在値を初期値として表示する。
 - Forge Neo 本体に存在しない実験機能は、必ず `Enable ...` checkbox を持つ。
 - 実験機能の `Enable` は初期値 `False` とする。
-- すべての experimental checkbox が `False` で、`Attention backend` が `Forge current/default` のままなら、推論結果と推論経路は Forge Neo baseline と同等でなければならない。
+- すべての experimental checkbox が `False` で、`Enable attention backend override=False` または `Attention backend=Forge current/default` のままなら、推論結果と推論経路は Forge Neo baseline と同等でなければならない。
 - サブ Accordion 内の実験用 `Enable ...` checkbox を `True` にした場合、親の `Enable Nz-Anima-PredLab` が `False` なら UI callback で `True` にする。
 - 親の `Enable Nz-Anima-PredLab` を `False` にした場合、サブ Accordion 内の checkbox は変更しない。ユーザーが一時的に親だけを off にしても、子項目の調整値を保持する。
 - UI の選択値は生成開始時に snapshot し、生成中に UI を変更しても進行中の batch へは反映しない。
@@ -235,7 +235,8 @@ UI:
 
 | Control | UI type | Default | Notes |
 | --- | --- | --- | --- |
-| `Attention backend` | dropdown | `Forge current/default` | StabilityMatrix版 Forge Neo 実測では本体の現在値が `attention_sage`。`Forge current/default` 以外を選ぶと attention kernel patch が有効になる。 |
+| `Enable attention backend override` | checkbox | `False` | Attention kernel patch を有効化する。親の `Enable Nz-Anima-PredLab` が `False` なら UI callback で `True` にする。 |
+| `Attention backend` | dropdown | `Forge current/default` | StabilityMatrix版 Forge Neo 実測では本体の現在値が `attention_sage`。`Enable attention backend override=True` かつ `Forge current/default` 以外を選ぶと attention kernel patch が有効になる。 |
 | `Attention target` | radio | `self + cross` | Forge baseline と一致。実験時のみ `self only` / `cross only` を選べる。 |
 | `Attention block start` | slider | `0` | 現行UIは range slider ではなく start/end の2本の slider。 |
 | `Attention block end` | slider | `27` | Forge baseline は全 block 同一 backend。range を絞る場合は実験扱い。 |
@@ -250,7 +251,7 @@ UI:
 
 `Forge current/default` は実行環境で検出された本体設定をそのまま使う値である。対象環境では現時点で `attention_sage` と解釈する。
 
-`Attention backend` が `Forge current/default` 以外の場合は、`Debug log mode=Off` でも attention kernel 実験として有効になる。実験時は `attention_kernel_call` と `attention_kernel_summary` をログに出す。ログには `requested_backend`、Forge 内部で観測できた `actual_backend`、`internal_fallback`、`actual_backends` を含め、指定 backend 関数が内部で `pytorch_sdpa` に fallback していないかを確認できるようにする。
+`Enable attention backend override=True` かつ `Attention backend` が `Forge current/default` 以外の場合は、`Debug log mode` が空欄でも attention kernel 実験として有効になる。実験時は `attention_kernel_call` と `attention_kernel_summary` をログに出す。ログには `requested_backend`、Forge 内部で観測できた `actual_backend`、`internal_fallback`、`actual_backends` を含め、指定 backend 関数が内部で `pytorch_sdpa` に fallback していないかを確認できるようにする。
 
 実機検証では `attention_sage` は `actual_backends=sage:1792`、`internal_fallbacks=0` で最速だった。`attention_flash` は `actual_backends=flash:1792` で動作したが、総生成時間は `attention_sage` より長かった。`attention_xformers` は対象環境で `xformers` 実体が import されておらず、内部で `pytorch_sdpa_fallback` へ落ち、cross attention で shape mismatch を起こしたため unsafe と扱う。`xformers` が実体として利用できない場合は、Nz-Anima-PredLab は `attention_xformers` の実行を避けて元の attention 経路へ戻す。
 
@@ -819,9 +820,9 @@ Verbose trace でのみ出す項目:
 
 ## 12. Patch 仕様
 
-現行実装は診断機能に加えて、実機検証用の `Identity patch test`、attention backend 差し替え、2D sparse attention 実験 patch、TeaCache / residual cache 実験 patch、Spectrum / spectral feature forecasting 実験 patch を持つ。
+現行実装は診断機能に加えて、実機検証用の `Identity Patch test`、attention backend 差し替え、2D sparse attention 実験 patch、TeaCache / residual cache 実験 patch、Spectrum / spectral feature forecasting 実験 patch を持つ。
 
-`Identity patch test` では `backend.nn.anima.Block.forward` を Nz-Anima-PredLab の wrapper に差し替え、wrapper 内で元の `Block.forward` をそのまま呼ぶ。これは高速化ではなく、Forge Neo 本体の推論パイプラインの一部を拡張側から安全に迂回・復帰できるかを確認するための検証である。
+`Identity Patch test` では `backend.nn.anima.Block.forward` を Nz-Anima-PredLab の wrapper に差し替え、wrapper 内で元の `Block.forward` をそのまま呼ぶ。これは高速化ではなく、Forge Neo 本体の推論パイプラインの一部を拡張側から安全に迂回・復帰できるかを確認するための検証である。
 
 検証ログ:
 
@@ -867,7 +868,7 @@ patch 候補:
 
 - `cond_batch_trace`: `backend.sampling.sampling_function.calc_cond_uncond_batch` の診断 wrapper。現行UIフローからは自動適用しない。
 - `block_structure_trace`: `backend.nn.anima.Block.forward` と `SelfCrossAttention.compute_qkv` の診断 wrapper。`Diagnose only` + `Verbose diagnose log` + 他実験無効時に適用する。
-- `block_forward_identity`: `Identity patch test` 用。`Block.forward` を wrapper 経由にして元実装を呼ぶ。
+- `block_forward_identity`: `Identity Patch test` 用。`Block.forward` を wrapper 経由にして元実装を呼ぶ。
 - `attention_kernel`: `Block.forward` と `SelfCrossAttention.torch_attention_op` を wrapper し、選択した Forge attention backend を明示実行する。
 - `sparse_attention`: `Block.forward` と `SelfCrossAttention.torch_attention_op` を wrapper し、条件に合う self-attention を 2D sparse attention に置換する。
 
@@ -906,7 +907,7 @@ Spectrum patch の基本挙動:
 
 patch 優先順位:
 
-1. `Identity patch test`。診断用であり、他の experimental patch と同時に使わない。
+1. `Identity Patch test`。診断用であり、他の experimental patch と同時に使わない。
 2. `TeaCache / residual cache experiment` または `Spectrum / spectral feature forecasting experiment`。両者は UI 相互排他により同時適用しない。
 3. H/W/T 情報を保持できる `Block.forward` / `SelfCrossAttention` 付近での2D sparse attention実験。
 4. Forge Neoの低bit・compile機能をAnimaへ適用するためのmodel load / operation選択調査。
@@ -918,7 +919,7 @@ patch 優先順位:
 以下の場合は処理を変更しない:
 
 - `Enable Nz-Anima-PredLab` が false
-- `Debug log mode` が `Off` で、すべての実験機能が baseline / disabled
+- `Debug log mode` が空欄で、すべての実験機能が baseline / disabled
 - model detection が unsupported で、かつ対象 experimental patch が Anima 固有 patch point を必要とする
 - txt2img 以外
 - img2img / Hires.fix / ControlNet / IP-Adapter / 参照画像系拡張が有効と判断できる
@@ -934,7 +935,7 @@ patch 優先順位:
 - NaN / Inf を検出した場合
 - TeaCache residual の shape / dtype / device が現在の hidden state と一致しない場合
 - Spectrum forecast の shape / dtype / device が現在の model output と一致しない場合
-- ユーザーが `Debug log mode` を Off にし、該当する実験機能も baseline / disabled にした場合
+- ユーザーが `Debug log mode` を空欄にし、該当する実験機能も baseline / disabled にした場合
 - script unload
 
 TeaCache 固有の安全条件:
@@ -975,11 +976,11 @@ Diagnose only:
 [Nz-Anima-PredLab] denoiser_calls=30 avg_step_time=1.234s total_sampling_time=37.020s
 ```
 
-Identity patch test:
+Identity Patch test:
 
 ```text
 [Nz-Anima-PredLab] applied identity patch kind=block_forward_identity target=backend.nn.anima.Block.forward behavior=call_original
-[Nz-Anima-PredLab] version=0.1.1 enabled=True mode=Identity patch test status=identity-patch
+[Nz-Anima-PredLab] version=0.1.1 enabled=True mode=Identity Patch test status=identity-patch
 [Nz-Anima-PredLab] identity_patch_call=call=0 block_index=0 input_shape=2x1x96x96x2048 output_shape=2x1x96x96x2048 same_shape=True route=Nz-Anima-PredLab->original_Block.forward
 [Nz-Anima-PredLab] identity_patch_summary=calls=896 num_blocks=28 logged_calls=17 shape_mismatches=0 errors=0 active=True target=backend.nn.anima.Block.forward behavior=call_original
 ```
@@ -1053,10 +1054,10 @@ README に明記する項目:
 - supported model で model detection evidence を出力できる。
 - `Diagnose only` で total sampling time と average step time を出力できる。
 - `Diagnose only` で attention backend、uncond presence、CFG 関連情報、dtype / Forge ops 関連情報を一括出力できる。
-- `Identity patch test` で `backend.nn.anima.Block.forward` を wrapper 経由に切り替え、元の `Block.forward` を呼び戻せる。
-- `Identity patch test` の summary で `steps * num_blocks` と一致する call count、`shape_mismatches=0`、`errors=0` を確認できる。
-- `Off` かつすべての個別 experimental control が baseline / disabled の場合、ログ出力と処理変更が止まる。
-- `mode=Off` でも `Attention backend != Forge current/default` または `Enable 2D sparse attention=True` の場合は、該当 experimental patch が動作し、設定 snapshot と summary を出力できる。
+- `Identity Patch test` で `backend.nn.anima.Block.forward` を wrapper 経由に切り替え、元の `Block.forward` を呼び戻せる。
+- `Identity Patch test` の summary で `steps * num_blocks` と一致する call count、`shape_mismatches=0`、`errors=0` を確認できる。
+- `Debug log mode` が空欄、かつすべての個別 experimental control が baseline / disabled の場合、ログ出力と処理変更が止まる。
+- `Debug log mode` が空欄でも `Enable attention backend override=True` かつ `Attention backend != Forge current/default`、または `Enable 2D sparse attention=True` の場合は、該当 experimental patch が動作し、設定 snapshot と summary を出力できる。
 - 例外時に WebUI 起動と画像生成を可能な限り止めず、status を `error` または degraded 状態へ移せる。
 
 高速化実験版の完了条件:
