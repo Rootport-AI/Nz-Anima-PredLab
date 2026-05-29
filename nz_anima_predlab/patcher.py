@@ -45,6 +45,10 @@ def apply_patch(kind: str, context: Any = None) -> PatchResult:
         return _apply_teacache_patch()
     if kind == "spectrum":
         return _apply_spectrum_patch()
+    if kind == "tensor_dump":
+        return _apply_tensor_dump_patch()
+    if kind == "tensor_dump_output":
+        return _apply_tensor_dump_output_patch()
     warning(f"patch '{kind}' is not implemented in the diagnostic build")
     return PatchResult(False, kind, "not implemented")
 
@@ -253,6 +257,7 @@ def _spectrum_model_function_wrapper_body(model_function: Any, args: dict[str, A
 
     if reason is not None:
         out = _spectrum_actual_forward(model_function, args)
+        _dump_spectrum_final_output(out, cnt, step_index, timestep, reason)
         STATE.spectrum_actual_forwards += 1
         _spectrum_update_after_actual(runtime, cnt, out, reason)
         _spectrum_record_runtime_input(runtime, x, timestep)
@@ -261,6 +266,7 @@ def _spectrum_model_function_wrapper_body(model_function: Any, args: dict[str, A
 
     if STATE.spectrum_dry_run:
         out = _spectrum_actual_forward(model_function, args)
+        _dump_spectrum_final_output(out, cnt, step_index, timestep, "dry_run")
         STATE.spectrum_actual_forwards += 1
         STATE.spectrum_dry_run_forecasts += 1
         runtime["num_cached"] = int(runtime.get("num_cached", 0)) + 1
@@ -284,6 +290,7 @@ def _spectrum_model_function_wrapper_body(model_function: Any, args: dict[str, A
     except Exception as exc:
         STATE.spectrum_fallbacks += 1
         out = _spectrum_actual_forward(model_function, args)
+        _dump_spectrum_final_output(out, cnt, step_index, timestep, "fallback")
         STATE.spectrum_actual_forwards += 1
         _spectrum_update_after_actual(runtime, cnt, out, f"fallback:{_short_error(exc)}")
         _spectrum_record_runtime_input(runtime, x, timestep)
@@ -293,6 +300,98 @@ def _spectrum_model_function_wrapper_body(model_function: Any, args: dict[str, A
 
 def _spectrum_actual_forward(model_function: Any, args: dict[str, Any]):
     return model_function(args["input"], args["timestep"], **args["c"])
+
+
+def _dump_spectrum_final_output(
+    out: Any,
+    cnt: int,
+    step_index: int,
+    timestep: Any,
+    reason: str,
+) -> None:
+    if not (STATE.tensor_dump_active() and STATE.dump_spectrum_final_output):
+        return
+    local_call_index = STATE.tensor_dump_spectrum_local_call_index
+    STATE.tensor_dump_spectrum_local_call_index += 1
+    from .tensor_dump import dump_tensor
+
+    dump_tensor(
+        "spectrum_final_output",
+        out,
+        logical_step_index=step_index,
+        local_call_index=local_call_index,
+        call_index=cnt,
+        decision="actual",
+        timestep_value=timestep,
+        spectrum_cnt=cnt,
+        extra={"reason": reason, "source": "spectrum"},
+    )
+
+
+def _apply_tensor_dump_output_patch() -> PatchResult:
+    kind = "tensor_dump_output"
+    if is_patched(kind):
+        return PatchResult(True, kind, "already patched")
+
+    try:
+        from backend.sampling import sampling_function
+    except Exception as exc:
+        return PatchResult(False, kind, f"import failed: {exc}")
+
+    original = getattr(sampling_function, "calc_cond_uncond_batch", None)
+    if original is None or not callable(original):
+        return PatchResult(False, kind, "calc_cond_uncond_batch not found")
+
+    def dumped_calc_cond_uncond_batch(model, cond, uncond, x_in, timestep, model_options):
+        if not _should_tensor_dump_output_patch():
+            return original(model, cond, uncond, x_in, timestep, model_options)
+
+        patched_model_options = dict(model_options or {})
+        existing_wrapper = patched_model_options.get("model_function_wrapper")
+        if existing_wrapper is not None:
+            _tensor_dump_warn_once(
+                "existing_model_function_wrapper",
+                "tensor_dump_output_unavailable reason=existing_model_function_wrapper",
+            )
+            return original(model, cond, uncond, x_in, timestep, model_options)
+
+        def model_function_wrapper(model_function, args):
+            out = model_function(args["input"], args["timestep"], **args["c"])
+            local_call_index = STATE.tensor_dump_spectrum_local_call_index
+            STATE.tensor_dump_spectrum_local_call_index += 1
+            from .tensor_dump import dump_tensor
+
+            dump_tensor(
+                "spectrum_final_output",
+                out,
+                logical_step_index=max(0, STATE.denoiser_calls - 1),
+                local_call_index=local_call_index,
+                call_index=local_call_index,
+                decision="actual",
+                timestep_value=args.get("timestep"),
+                extra={"source": "baseline"},
+            )
+            return out
+
+        patched_model_options["model_function_wrapper"] = model_function_wrapper
+        return original(model, cond, uncond, x_in, timestep, patched_model_options)
+
+    sampling_function.calc_cond_uncond_batch = dumped_calc_cond_uncond_batch
+
+    def restore() -> None:
+        sampling_function.calc_cond_uncond_batch = original
+
+    STATE.patches[kind] = {"restore": restore}
+    info("applied diagnostic patch kind=tensor_dump_output target=model_function_output")
+    return PatchResult(True, kind, "applied")
+
+
+def _should_tensor_dump_output_patch() -> bool:
+    return (
+        STATE.tensor_dump_active()
+        and STATE.dump_spectrum_final_output
+        and not STATE.spectrum_enabled
+    )
 
 
 def _spectrum_cast_forecast(out: Any, x: Any) -> Any:
@@ -610,18 +709,28 @@ def _ensure_identity_num_blocks() -> None:
 
 
 def _runtime_num_blocks() -> int | None:
+    blocks = _runtime_blocks()
+    if blocks is None:
+        return None
+    return len(blocks)
+
+
+def _runtime_blocks() -> Any | None:
     try:
         from modules import shared
 
         sd_model = getattr(shared, "sd_model", None)
         forge_objects = getattr(sd_model, "forge_objects", None)
-        unet = getattr(forge_objects, "unet", None)
+        if isinstance(forge_objects, dict):
+            unet = forge_objects.get("unet")
+        else:
+            unet = getattr(forge_objects, "unet", None)
         model = getattr(unet, "model", None)
         diffusion_model = getattr(model, "diffusion_model", model)
         blocks = getattr(diffusion_model, "blocks", None)
         if blocks is None:
             return None
-        return len(blocks)
+        return blocks
     except Exception:
         return None
 
@@ -1010,6 +1119,13 @@ def _short_error(exc: Exception) -> str:
     return text
 
 
+def _tensor_dump_warn_once(key: str, message: str) -> None:
+    if key in STATE.tensor_dump_warned_reasons:
+        return
+    STATE.tensor_dump_warned_reasons.add(key)
+    warning(message)
+
+
 def _apply_teacache_patch() -> PatchResult:
     kind = "teacache"
     if is_patched(kind):
@@ -1204,6 +1320,14 @@ def _teacache_forward_body(
                 **block_kwargs,
             )
         residual = x_B_T_H_W_D.to(cache_device) - ori_x
+        _dump_teacache_residual(
+            residual,
+            cond_or_uncond,
+            batch_per_slot,
+            step_index,
+            timesteps_B_T,
+            cache_device,
+        )
         for slot_index, key in enumerate(cond_or_uncond):
             item = _teacache_slot(cache, int(key))
             item["previous_residual"] = residual[
@@ -1440,6 +1564,41 @@ def _teacache_apply_residual(
         x[start:end] = x[start:end] + residual.to(x.device)
 
 
+def _dump_teacache_residual(
+    residual: Any,
+    cond_or_uncond: list[int],
+    batch_per_slot: int,
+    step_index: int,
+    timestep: Any,
+    cache_device: Any,
+) -> None:
+    if not (
+        STATE.tensor_dump_active()
+        and STATE.dump_teacache_residual
+        and STATE.teacache_enabled
+    ):
+        return
+    from .tensor_dump import dump_tensor
+
+    for slot_index, key in enumerate(cond_or_uncond):
+        start = slot_index * batch_per_slot
+        end = start + batch_per_slot
+        local_call_index = STATE.tensor_dump_teacache_local_call_index
+        STATE.tensor_dump_teacache_local_call_index += 1
+        dump_tensor(
+            "teacache_residual",
+            residual[start:end],
+            logical_step_index=step_index,
+            local_call_index=local_call_index,
+            call_index=local_call_index,
+            slot=int(key),
+            decision="full",
+            timestep_value=timestep,
+            teacache_model_call=STATE.teacache_model_calls,
+            extra={"cache_device": str(cache_device)},
+        )
+
+
 def _teacache_log_call(
     decision: str,
     step_index: int,
@@ -1461,6 +1620,254 @@ def _teacache_log_call(
         f"reason={reason or 'threshold'} rel_l1={rel_text} "
         f"threshold={STATE.teacache_threshold:.4f} dry_run={STATE.teacache_dry_run}"
     )
+
+
+def _apply_tensor_dump_patch() -> PatchResult:
+    kind = "tensor_dump"
+    if is_patched(kind):
+        return PatchResult(True, kind, "already patched")
+
+    try:
+        from backend.nn import anima
+    except Exception as exc:
+        return PatchResult(False, kind, f"import failed: {exc}")
+
+    anima_cls = getattr(anima, "Anima", None)
+    block_cls = getattr(anima, "Block", None)
+    attention_cls = getattr(anima, "SelfCrossAttention", None)
+    if anima_cls is None or block_cls is None or attention_cls is None:
+        return PatchResult(False, kind, "Anima/Block/SelfCrossAttention not found")
+
+    target_name = "_forward"
+    original_anima_forward = getattr(anima_cls, target_name, None)
+    if original_anima_forward is None or not callable(original_anima_forward):
+        target_name = "forward"
+        original_anima_forward = getattr(anima_cls, target_name, None)
+    if original_anima_forward is None or not callable(original_anima_forward):
+        return PatchResult(False, kind, "Anima._forward/forward not found")
+
+    original_block_forward = block_cls.forward
+    original_compute_attention = attention_cls.compute_attention
+    mlp_restores = _install_tensor_dump_mlp_wrappers()
+
+    def dumped_anima_forward(self, x, timesteps, context, *args, **kwargs):
+        if not _should_tensor_dump_patch():
+            return original_anima_forward(self, x, timesteps, context, *args, **kwargs)
+        previous_context = STATE.tensor_dump_current_context
+        current_context = dict(previous_context or {})
+        current_context["timestep_value"] = timesteps
+        STATE.tensor_dump_current_context = current_context
+        try:
+            return original_anima_forward(self, x, timesteps, context, *args, **kwargs)
+        finally:
+            STATE.tensor_dump_current_context = previous_context
+
+    def dumped_block_forward(self, x_B_T_H_W_D, *args, **kwargs):
+        if not _should_tensor_dump_patch():
+            return original_block_forward(self, x_B_T_H_W_D, *args, **kwargs)
+
+        _ensure_tensor_dump_num_blocks()
+        block_call_index = STATE.tensor_dump_block_call_index
+        STATE.tensor_dump_block_call_index += 1
+        block_index = _tensor_dump_block_index(block_call_index)
+        previous_context = STATE.tensor_dump_current_context
+        current_context = dict(previous_context or {})
+        current_context.update(
+            {
+                "block_call_index": block_call_index,
+                "block_index": block_index,
+                "logical_step_index": max(0, STATE.denoiser_calls - 1),
+            }
+        )
+        STATE.tensor_dump_current_context = current_context
+        try:
+            output = original_block_forward(self, x_B_T_H_W_D, *args, **kwargs)
+            if STATE.dump_block_output:
+                local_call_index = STATE.tensor_dump_block_local_call_index
+                STATE.tensor_dump_block_local_call_index += 1
+                _dump_tensor_from_context(
+                    "block_output",
+                    output,
+                    local_call_index=local_call_index,
+                    call_index=local_call_index,
+                    context=current_context,
+                )
+            return output
+        finally:
+            STATE.tensor_dump_current_context = previous_context
+
+    def dumped_compute_attention(self, q, k, v, transformer_options=None):
+        output = original_compute_attention(
+            self,
+            q,
+            k,
+            v,
+            transformer_options=transformer_options or {},
+        )
+        if (
+            _should_tensor_dump_patch()
+            and STATE.dump_cross_attention_output
+            and not getattr(self, "is_SelfAttn", False)
+        ):
+            local_call_index = STATE.tensor_dump_cross_attention_local_call_index
+            STATE.tensor_dump_cross_attention_local_call_index += 1
+            _dump_tensor_from_context(
+                "cross_attention_output",
+                output,
+                local_call_index=local_call_index,
+                call_index=local_call_index,
+                context=STATE.tensor_dump_current_context or {},
+                attn_type="cross",
+            )
+        return output
+
+    setattr(anima_cls, target_name, dumped_anima_forward)
+    block_cls.forward = dumped_block_forward
+    attention_cls.compute_attention = dumped_compute_attention
+
+    def restore() -> None:
+        setattr(anima_cls, target_name, original_anima_forward)
+        block_cls.forward = original_block_forward
+        attention_cls.compute_attention = original_compute_attention
+        for module, original_forward in reversed(mlp_restores):
+            try:
+                module.forward = original_forward
+            except Exception:
+                pass
+
+    STATE.patches[kind] = {"restore": restore}
+    info(
+        "applied diagnostic patch kind=tensor_dump "
+        f"target=Anima.{target_name}/Block.forward/SelfCrossAttention.compute_attention"
+    )
+    return PatchResult(True, kind, "applied")
+
+
+def _should_tensor_dump_patch() -> bool:
+    return (
+        STATE.tensor_dump_block_level_active()
+        and not STATE.teacache_enabled
+        and not STATE.spectrum_enabled
+        and not STATE.sparse_enabled
+        and not STATE.attention_override_active()
+    )
+
+
+def _ensure_tensor_dump_num_blocks() -> None:
+    if STATE.tensor_dump_num_blocks is not None:
+        return
+    STATE.tensor_dump_num_blocks = _runtime_num_blocks()
+
+
+def _tensor_dump_block_index(call_index: int) -> int | None:
+    num_blocks = STATE.tensor_dump_num_blocks
+    if not num_blocks:
+        return None
+    return call_index % num_blocks
+
+
+def _dump_tensor_from_context(
+    tensor_type: str,
+    tensor: Any,
+    *,
+    local_call_index: int,
+    call_index: int,
+    context: dict[str, Any],
+    attn_type: str | None = None,
+) -> None:
+    from .tensor_dump import dump_tensor
+
+    block_index = context.get("block_index")
+    if not isinstance(block_index, int):
+        block_index = None
+    block_call_index = context.get("block_call_index")
+    if not isinstance(block_call_index, int):
+        block_call_index = None
+    logical_step_index = context.get("logical_step_index")
+    if not isinstance(logical_step_index, int):
+        logical_step_index = max(0, STATE.denoiser_calls - 1)
+    dump_tensor(
+        tensor_type,
+        tensor,
+        logical_step_index=logical_step_index,
+        local_call_index=local_call_index,
+        call_index=call_index,
+        block_call_index=block_call_index,
+        block_index=block_index,
+        timestep_value=context.get("timestep_value"),
+        attn_type=attn_type,
+    )
+
+
+def _install_tensor_dump_mlp_wrappers() -> list[tuple[Any, Any]]:
+    restores: list[tuple[Any, Any]] = []
+    if not STATE.dump_mlp_output:
+        return restores
+    blocks = _runtime_blocks()
+    if not blocks:
+        _tensor_dump_warn_once("mlp_no_blocks", "mlp_dump_unavailable reason=blocks_not_found")
+        return restores
+    found = 0
+    for block_index, block in enumerate(blocks):
+        module = _find_mlp_module(block)
+        if module is None:
+            continue
+        original_forward = getattr(module, "forward", None)
+        if not callable(original_forward):
+            continue
+
+        def dumped_mlp_forward(*args, _original=original_forward, _block_index=block_index, **kwargs):
+            output = _original(*args, **kwargs)
+            if _should_tensor_dump_patch() and STATE.dump_mlp_output:
+                local_call_index = STATE.tensor_dump_mlp_local_call_index
+                STATE.tensor_dump_mlp_local_call_index += 1
+                context = dict(STATE.tensor_dump_current_context or {})
+                context.setdefault("block_index", _block_index)
+                context.setdefault("logical_step_index", max(0, STATE.denoiser_calls - 1))
+                _dump_tensor_from_context(
+                    "mlp_output",
+                    output,
+                    local_call_index=local_call_index,
+                    call_index=local_call_index,
+                    context=context,
+                )
+            return output
+
+        module.forward = dumped_mlp_forward
+        restores.append((module, original_forward))
+        found += 1
+    if found == 0:
+        _tensor_dump_warn_once("mlp_module_not_found", "mlp_dump_unavailable reason=mlp_module_not_found")
+    return restores
+
+
+def _find_mlp_module(block: Any) -> Any | None:
+    candidate_names = (
+        "mlp",
+        "ffn",
+        "ff",
+        "feed_forward",
+        "feedforward",
+        "feed_forward_layer",
+    )
+    for name in candidate_names:
+        module = getattr(block, name, None)
+        if callable(getattr(module, "forward", None)):
+            return module
+    named_children = getattr(block, "named_children", None)
+    if callable(named_children):
+        try:
+            for name, module in named_children():
+                lowered = str(name).lower()
+                class_name = type(module).__name__.lower()
+                if any(token in lowered for token in candidate_names) or any(
+                    token in class_name for token in ("mlp", "feedforward", "ffn")
+                ):
+                    if callable(getattr(module, "forward", None)):
+                        return module
+        except Exception:
+            return None
+    return None
 
 
 def _apply_sparse_attention_patch() -> PatchResult:

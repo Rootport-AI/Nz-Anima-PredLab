@@ -255,6 +255,32 @@ UI:
 
 実機検証では `attention_sage` は `actual_backends=sage:1792`、`internal_fallbacks=0` で最速だった。`attention_flash` は `actual_backends=flash:1792` で動作したが、総生成時間は `attention_sage` より長かった。`attention_xformers` は対象環境で `xformers` 実体が import されておらず、内部で `pytorch_sdpa_fallback` へ落ち、cross attention で shape mismatch を起こしたため unsafe と扱う。`xformers` が実体として利用できない場合は、Nz-Anima-PredLab は `attention_xformers` の実行を避けて元の attention 経路へ戻す。
 
+#### Tensor dump controls
+
+目的:
+
+- Anima feature forecasting 実験のため、推論中の中間 tensor と軽量統計を研究用ログとして保存する。
+- この機能は高速化実装ではなく、後段のオフライン解析用データ収集基盤である。
+
+UI:
+
+| Control | UI type | Default | Notes |
+| --- | --- | --- | --- |
+| `Dump TeaCache residual` | checkbox | `False` | `TeaCache=True` の full calculation 時のみ `block_stack_output - block_stack_input` を保存する。 |
+| `Dump block output` | checkbox | `False` | 全 block の軽量統計を保存し、生 tensor は代表 block `0,7,14,21,27` に限定する。 |
+| `Dump cross-attention output` | checkbox | `False` | cross-attention branch output を保存する。self-attention は対象外。 |
+| `Dump MLP output` | checkbox | `False` | MLP module が特定できる場合のみ保存する。見つからない場合は warning fallback とする。 |
+| `Dump Spectrum final output` | checkbox | `False` | Spectrum ON の actual forward、および Spectrum OFF の通常 forward output を保存する。forecast output は初期対象外。 |
+
+動作:
+
+- tensor dump は `Enable Nz-Anima-PredLab=True` かつ `Enable debug log mode=True` の場合だけ有効になる。
+- 保存先は画像出力ディレクトリから `Images/logs/YYYY-MM-DD/run_.../` を推定し、推定できない場合は `logs/YYYY-MM-DD/run_.../` へ fallback する。
+- 保存構成は `meta.json`、`stats.parquet`、`tensors.zarr/` とする。
+- `zarr` / `pandas` / `pyarrow` が import できない場合はインストールを試みる。失敗した場合は `tensor_dump_unavailable` warning を出し、生成は継続する。
+- block / cross-attention / MLP dump は `TeaCache=False`、`Spectrum=False`、`Enable 2D sparse attention=False`、`Enable attention backend override=False` の場合だけ有効にする。
+- 各 record には `logical_step_index`、`local_call_index`、`block_call_index`、`block_index`、`timestep_value`、`teacache_model_call`、`spectrum_cnt` を可能な範囲で保存する。
+
 #### TeaCache / residual cache controls
 
 目的:

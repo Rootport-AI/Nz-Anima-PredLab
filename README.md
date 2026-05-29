@@ -12,6 +12,7 @@ The extension started as a diagnostic tool and now includes opt-in experimental 
 - Attention backend trace and optional attention backend override
 - TeaCache / residual cache experiment for Anima block skipping
 - 2D sparse attention experiment scaffold
+- Opt-in tensor dump probes for forecasting research data collection
 - Cond/uncond, low-bit, dtype, and Forge operations diagnostics
 - Runtime patch restore on disable, unsupported model, or unload
 

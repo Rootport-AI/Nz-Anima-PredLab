@@ -142,6 +142,11 @@ class RuntimeState:
     spectrum_stop_progress: float = 0.80
     spectrum_dry_run: bool = False
     spectrum_verbose_trace: bool = False
+    dump_teacache_residual: bool = False
+    dump_block_output: bool = False
+    dump_cross_attention_output: bool = False
+    dump_mlp_output: bool = False
+    dump_spectrum_final_output: bool = False
     status: str = "disabled"
     error_message: str | None = None
     model_detection: Any | None = None
@@ -200,6 +205,20 @@ class RuntimeState:
     spectrum_errors: int = 0
     spectrum_logged_calls: int = 0
     spectrum_unavailable_reason: str | None = None
+    tensor_dump_run_dir: str | None = None
+    tensor_dump_initialized: bool = False
+    tensor_dump_records: int = 0
+    tensor_dump_errors: int = 0
+    tensor_dump_unavailable_reason: str | None = None
+    tensor_dump_block_call_index: int = 0
+    tensor_dump_block_local_call_index: int = 0
+    tensor_dump_cross_attention_local_call_index: int = 0
+    tensor_dump_mlp_local_call_index: int = 0
+    tensor_dump_teacache_local_call_index: int = 0
+    tensor_dump_spectrum_local_call_index: int = 0
+    tensor_dump_current_context: dict[str, Any] | None = None
+    tensor_dump_num_blocks: int | None = None
+    tensor_dump_warned_reasons: set[str] = field(default_factory=set)
     generation_logged: bool = False
     generation_start_source: str | None = None
     patches: dict[str, Any] = field(default_factory=dict)
@@ -278,6 +297,11 @@ class RuntimeState:
         spectrum_verbose_trace: bool = False,
         debug_log_enabled: bool = True,
         attention_enabled: bool | None = None,
+        dump_teacache_residual: bool = False,
+        dump_block_output: bool = False,
+        dump_cross_attention_output: bool = False,
+        dump_mlp_output: bool = False,
+        dump_spectrum_final_output: bool = False,
     ) -> None:
         self.enabled = bool(enabled)
         self.debug_log_enabled = bool(debug_log_enabled)
@@ -353,6 +377,11 @@ class RuntimeState:
         self.spectrum_dry_run = bool(spectrum_dry_run)
         self.spectrum_verbose_trace = bool(spectrum_verbose_trace)
         self._apply_spectrum_preset()
+        self.dump_teacache_residual = bool(dump_teacache_residual)
+        self.dump_block_output = bool(dump_block_output)
+        self.dump_cross_attention_output = bool(dump_cross_attention_output)
+        self.dump_mlp_output = bool(dump_mlp_output)
+        self.dump_spectrum_final_output = bool(dump_spectrum_final_output)
         if self.sparse_block_start > self.sparse_block_end:
             self.sparse_block_start, self.sparse_block_end = (
                 self.sparse_block_end,
@@ -379,6 +408,7 @@ class RuntimeState:
             or self.cond_uncond_enabled
             or self.lowbit_enabled
             or self.compile_enabled
+            or self.tensor_dump_active()
         )
 
     def experimental_active(self) -> bool:
@@ -394,6 +424,25 @@ class RuntimeState:
 
     def attention_override_active(self) -> bool:
         return self.attention_enabled and self.attention_backend != ATTENTION_BACKEND_CURRENT
+
+    def tensor_dump_requested(self) -> bool:
+        return (
+            self.dump_teacache_residual
+            or self.dump_block_output
+            or self.dump_cross_attention_output
+            or self.dump_mlp_output
+            or self.dump_spectrum_final_output
+        )
+
+    def tensor_dump_active(self) -> bool:
+        return self.enabled and self.debug_log_enabled and self.tensor_dump_requested()
+
+    def tensor_dump_block_level_active(self) -> bool:
+        return self.tensor_dump_active() and (
+            self.dump_block_output
+            or self.dump_cross_attention_output
+            or self.dump_mlp_output
+        )
 
     def _apply_teacache_preset(self) -> None:
         if self.teacache_preset == TEACACHE_PRESET_CUSTOM:
@@ -491,6 +540,20 @@ class RuntimeState:
         self.spectrum_errors = 0
         self.spectrum_logged_calls = 0
         self.spectrum_unavailable_reason = None
+        self.tensor_dump_run_dir = None
+        self.tensor_dump_initialized = False
+        self.tensor_dump_records = 0
+        self.tensor_dump_errors = 0
+        self.tensor_dump_unavailable_reason = None
+        self.tensor_dump_block_call_index = 0
+        self.tensor_dump_block_local_call_index = 0
+        self.tensor_dump_cross_attention_local_call_index = 0
+        self.tensor_dump_mlp_local_call_index = 0
+        self.tensor_dump_teacache_local_call_index = 0
+        self.tensor_dump_spectrum_local_call_index = 0
+        self.tensor_dump_current_context = None
+        self.tensor_dump_num_blocks = None
+        self.tensor_dump_warned_reasons.clear()
         self.generation_logged = False
         self.error_message = None
         if not self.enabled:

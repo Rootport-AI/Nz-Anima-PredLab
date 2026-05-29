@@ -78,6 +78,31 @@ class Script(scripts.Script):
                     value=_default_option("nzap_verbose_diagnose_log", False),
                     elem_id="nzap-verbose-diagnose-log",
                 )
+                dump_teacache_residual = gr.Checkbox(
+                    label="Dump TeaCache residual",
+                    value=False,
+                    elem_id="nzap-dump-teacache-residual",
+                )
+                dump_block_output = gr.Checkbox(
+                    label="Dump block output",
+                    value=False,
+                    elem_id="nzap-dump-block-output",
+                )
+                dump_cross_attention_output = gr.Checkbox(
+                    label="Dump cross-attention output",
+                    value=False,
+                    elem_id="nzap-dump-cross-attention-output",
+                )
+                dump_mlp_output = gr.Checkbox(
+                    label="Dump MLP output",
+                    value=False,
+                    elem_id="nzap-dump-mlp-output",
+                )
+                dump_spectrum_final_output = gr.Checkbox(
+                    label="Dump Spectrum final output",
+                    value=False,
+                    elem_id="nzap-dump-spectrum-final-output",
+                )
                 debug_log_enabled.change(
                     fn=_enable_parent_if_child_enabled,
                     inputs=[debug_log_enabled],
@@ -88,6 +113,18 @@ class Script(scripts.Script):
                     inputs=[mode],
                     outputs=[enabled, debug_log_enabled],
                 )
+                for control in (
+                    dump_teacache_residual,
+                    dump_block_output,
+                    dump_cross_attention_output,
+                    dump_mlp_output,
+                    dump_spectrum_final_output,
+                ):
+                    control.change(
+                        fn=_enable_parent_and_debug_if_child_enabled,
+                        inputs=[control],
+                        outputs=[enabled, debug_log_enabled],
+                    )
             with gr.Accordion("Attention", open=False, elem_id="nzap-attention-panel"):
                 attention_enabled = gr.Checkbox(
                     label="Enable attention backend override",
@@ -517,6 +554,11 @@ class Script(scripts.Script):
             spectrum_verbose_trace,
             debug_log_enabled,
             attention_enabled,
+            dump_teacache_residual,
+            dump_block_output,
+            dump_cross_attention_output,
+            dump_mlp_output,
+            dump_spectrum_final_output,
         ]
 
     def process_before_every_sampling(self, p, *script_args, **kwargs):
@@ -532,9 +574,20 @@ class Script(scripts.Script):
         except Exception as exc:
             STATE.set_error(f"postprocess failed: {exc}")
             exception("postprocess failed")
+        try:
+            from .tensor_dump import flush_stats
+
+            flush_stats()
+        except Exception as exc:
+            STATE.tensor_dump_errors += 1
+            warning(f"tensor_dump_flush_failed reason={exc}")
+            exception("tensor dump flush failed")
 
 
 def _apply_ui_args(script_args) -> None:
+    if len(script_args) >= 53:
+        STATE.apply_options(*script_args[:53])
+        return
     if len(script_args) >= 48:
         STATE.apply_options(*script_args[:48])
         return
@@ -578,11 +631,23 @@ def _begin_generation(p, script_args, source: str) -> None:
         log_generation_start(p)
         return
 
+    if STATE.tensor_dump_active():
+        try:
+            from .tensor_dump import initialize_run_if_needed
+
+            initialize_run_if_needed(p)
+        except Exception as exc:
+            STATE.tensor_dump_errors += 1
+            warning(f"tensor_dump_initialize_failed reason={exc}")
+
     _configure_generation_patches()
     log_generation_start(p)
 
 
 def _configure_generation_patches() -> None:
+    remove_patch("tensor_dump")
+    remove_patch("tensor_dump_output")
+
     if STATE.mode == MODE_IDENTITY_PATCH:
         remove_patch("block_structure_trace")
         remove_patch("attention_kernel")
@@ -637,10 +702,39 @@ def _configure_generation_patches() -> None:
         and not STATE.spectrum_enabled
         and not STATE.sparse_enabled
         and not STATE.attention_override_active()
+        and not STATE.tensor_dump_block_level_active()
     ):
         apply_patch("block_structure_trace")
     else:
         remove_patch("block_structure_trace")
+
+    if STATE.tensor_dump_active() and STATE.dump_spectrum_final_output and not STATE.spectrum_enabled:
+        apply_patch("tensor_dump_output")
+    else:
+        remove_patch("tensor_dump_output")
+
+    if (
+        STATE.tensor_dump_active()
+        and STATE.dump_teacache_residual
+        and not STATE.teacache_enabled
+        and "teacache_residual_requires_teacache" not in STATE.tensor_dump_warned_reasons
+    ):
+        STATE.tensor_dump_warned_reasons.add("teacache_residual_requires_teacache")
+        warning("tensor_dump_teacache_residual_inactive reason=teacache_disabled")
+
+    if STATE.tensor_dump_block_level_active():
+        if (
+            STATE.teacache_enabled
+            or STATE.spectrum_enabled
+            or STATE.sparse_enabled
+            or STATE.attention_override_active()
+        ):
+            remove_patch("tensor_dump")
+            warning("tensor_dump_unavailable reason=conflicts_with_active_generation_patch")
+        else:
+            apply_patch("tensor_dump")
+    else:
+        remove_patch("tensor_dump")
 
 
 def _remove_generation_patches() -> None:
@@ -650,6 +744,8 @@ def _remove_generation_patches() -> None:
     remove_patch("sparse_attention")
     remove_patch("teacache")
     remove_patch("spectrum")
+    remove_patch("tensor_dump")
+    remove_patch("tensor_dump_output")
 
 
 def _requires_supported_model() -> bool:
@@ -658,6 +754,7 @@ def _requires_supported_model() -> bool:
         or STATE.teacache_enabled
         or STATE.sparse_enabled
         or STATE.attention_override_active()
+        or STATE.tensor_dump_block_level_active()
     )
 
 
@@ -735,6 +832,12 @@ def _enable_parent_if_child_enabled(child_enabled: bool):
 
 def _debug_mode_selection_updates(mode: str):
     if _mode_selected(mode):
+        return True, True
+    return gr.update(), gr.update()
+
+
+def _enable_parent_and_debug_if_child_enabled(child_enabled: bool):
+    if child_enabled:
         return True, True
     return gr.update(), gr.update()
 
