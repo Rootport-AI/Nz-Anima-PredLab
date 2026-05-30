@@ -93,6 +93,11 @@ class Script(scripts.Script):
                     value=False,
                     elem_id="nzap-dump-spectrum-final-output",
                 )
+                dump_baseline_final_output = gr.Checkbox(
+                    label="Dump baseline final output",
+                    value=False,
+                    elem_id="nzap-dump-baseline-final-output",
+                )
                 gr.HTML(
                     '<div style="border-top: 3px solid var(--block-border-color, #4b5563); margin: 0.85rem 0 0.7rem;"></div>',
                     elem_id="nzap-debug-dump-divider",
@@ -123,6 +128,7 @@ class Script(scripts.Script):
                     dump_cross_attention_output,
                     dump_mlp_output,
                     dump_spectrum_final_output,
+                    dump_baseline_final_output,
                 ):
                     control.change(
                         fn=_enable_parent_and_debug_if_child_enabled,
@@ -563,6 +569,7 @@ class Script(scripts.Script):
             dump_cross_attention_output,
             dump_mlp_output,
             dump_spectrum_final_output,
+            dump_baseline_final_output,
         ]
 
     def process_before_every_sampling(self, p, *script_args, **kwargs):
@@ -589,6 +596,9 @@ class Script(scripts.Script):
 
 
 def _apply_ui_args(script_args) -> None:
+    if len(script_args) >= 54:
+        STATE.apply_options(*script_args[:54])
+        return
     if len(script_args) >= 53:
         STATE.apply_options(*script_args[:53])
         return
@@ -635,7 +645,7 @@ def _begin_generation(p, script_args, source: str) -> None:
         log_generation_start(p)
         return
 
-    if STATE.tensor_dump_active():
+    if _tensor_dump_will_save():
         try:
             from .tensor_dump import initialize_run_if_needed
 
@@ -712,10 +722,28 @@ def _configure_generation_patches() -> None:
     else:
         remove_patch("block_structure_trace")
 
-    if STATE.tensor_dump_active() and STATE.dump_spectrum_final_output and not STATE.spectrum_enabled:
+    if STATE.tensor_dump_active() and STATE.dump_baseline_final_output and not STATE.spectrum_enabled:
         apply_patch("tensor_dump_output")
     else:
         remove_patch("tensor_dump_output")
+
+    if (
+        STATE.tensor_dump_active()
+        and STATE.dump_spectrum_final_output
+        and not STATE.spectrum_enabled
+        and "spectrum_final_output_requires_spectrum" not in STATE.tensor_dump_warned_reasons
+    ):
+        STATE.tensor_dump_warned_reasons.add("spectrum_final_output_requires_spectrum")
+        warning("tensor_dump_spectrum_final_output_inactive reason=spectrum_disabled")
+
+    if (
+        STATE.tensor_dump_active()
+        and STATE.dump_baseline_final_output
+        and STATE.spectrum_enabled
+        and "baseline_final_output_requires_spectrum_off" not in STATE.tensor_dump_warned_reasons
+    ):
+        STATE.tensor_dump_warned_reasons.add("baseline_final_output_requires_spectrum_off")
+        warning("tensor_dump_baseline_final_output_inactive reason=spectrum_enabled")
 
     if (
         STATE.tensor_dump_active()
@@ -739,6 +767,25 @@ def _configure_generation_patches() -> None:
             apply_patch("tensor_dump")
     else:
         remove_patch("tensor_dump")
+
+
+def _tensor_dump_will_save() -> bool:
+    if not STATE.tensor_dump_active():
+        return False
+    if STATE.dump_teacache_residual and STATE.teacache_enabled:
+        return True
+    if STATE.dump_spectrum_final_output and STATE.spectrum_enabled:
+        return True
+    if STATE.dump_baseline_final_output and not STATE.spectrum_enabled:
+        return True
+    if STATE.tensor_dump_block_level_active():
+        return not (
+            STATE.teacache_enabled
+            or STATE.spectrum_enabled
+            or STATE.sparse_enabled
+            or STATE.attention_override_active()
+        )
+    return False
 
 
 def _remove_generation_patches() -> None:

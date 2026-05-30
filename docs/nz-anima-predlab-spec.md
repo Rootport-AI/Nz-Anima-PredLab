@@ -270,7 +270,8 @@ UI:
 | `Dump block output` | checkbox | `False` | 全 block の軽量統計を保存し、生 tensor は代表 block `0,7,14,21,27` に限定する。 |
 | `Dump cross-attention output` | checkbox | `False` | cross-attention branch output を保存する。self-attention は対象外。 |
 | `Dump MLP output` | checkbox | `False` | MLP module が特定できる場合のみ保存する。見つからない場合は warning fallback とする。 |
-| `Dump Spectrum final output` | checkbox | `False` | Spectrum ON の actual forward、および Spectrum OFF の通常 forward output を保存する。forecast output は初期対象外。 |
+| `Dump Spectrum final output` | checkbox | `False` | Spectrum ON の actual forward output を保存する。forecast output は初期対象外。 |
+| `Dump baseline final output` | checkbox | `False` | Spectrum OFF の通常 forward output を `baseline_final_output` として保存する。 |
 
 動作:
 

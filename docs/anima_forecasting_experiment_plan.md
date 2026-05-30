@@ -259,6 +259,8 @@ anima_probe_run_001/
   tensors.zarr/
     spectrum_final_output/
       all_steps
+    baseline_final_output/
+      all_steps
     teacache_residual/
       all_steps
     block_output/
@@ -719,7 +721,7 @@ TeaCache skipを行わないdry-run状態でも、このresidual列を保存で�
 model_function output / final denoiser output
 ```
 
-Spectrum有効時だけでなく、baseline実計算時にも保存する。
+Spectrum有効時の actual forward は `spectrum_final_output` として保存する。Spectrum OFF の通常 forward は比較基準として便利だが、混同を避けるため別チェックボックスで `baseline_final_output` として保存する。
 
 ### 16.3 block output probe
 

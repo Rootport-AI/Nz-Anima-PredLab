@@ -147,6 +147,7 @@ class RuntimeState:
     dump_cross_attention_output: bool = False
     dump_mlp_output: bool = False
     dump_spectrum_final_output: bool = False
+    dump_baseline_final_output: bool = False
     status: str = "disabled"
     error_message: str | None = None
     model_detection: Any | None = None
@@ -216,6 +217,7 @@ class RuntimeState:
     tensor_dump_mlp_local_call_index: int = 0
     tensor_dump_teacache_local_call_index: int = 0
     tensor_dump_spectrum_local_call_index: int = 0
+    tensor_dump_baseline_local_call_index: int = 0
     tensor_dump_current_context: dict[str, Any] | None = None
     tensor_dump_num_blocks: int | None = None
     tensor_dump_warned_reasons: set[str] = field(default_factory=set)
@@ -302,6 +304,7 @@ class RuntimeState:
         dump_cross_attention_output: bool = False,
         dump_mlp_output: bool = False,
         dump_spectrum_final_output: bool = False,
+        dump_baseline_final_output: bool = False,
     ) -> None:
         self.enabled = bool(enabled)
         self.debug_log_enabled = bool(debug_log_enabled)
@@ -382,6 +385,7 @@ class RuntimeState:
         self.dump_cross_attention_output = bool(dump_cross_attention_output)
         self.dump_mlp_output = bool(dump_mlp_output)
         self.dump_spectrum_final_output = bool(dump_spectrum_final_output)
+        self.dump_baseline_final_output = bool(dump_baseline_final_output)
         if self.sparse_block_start > self.sparse_block_end:
             self.sparse_block_start, self.sparse_block_end = (
                 self.sparse_block_end,
@@ -432,6 +436,7 @@ class RuntimeState:
             or self.dump_cross_attention_output
             or self.dump_mlp_output
             or self.dump_spectrum_final_output
+            or self.dump_baseline_final_output
         )
 
     def tensor_dump_active(self) -> bool:
@@ -551,6 +556,7 @@ class RuntimeState:
         self.tensor_dump_mlp_local_call_index = 0
         self.tensor_dump_teacache_local_call_index = 0
         self.tensor_dump_spectrum_local_call_index = 0
+        self.tensor_dump_baseline_local_call_index = 0
         self.tensor_dump_current_context = None
         self.tensor_dump_num_blocks = None
         self.tensor_dump_warned_reasons.clear()

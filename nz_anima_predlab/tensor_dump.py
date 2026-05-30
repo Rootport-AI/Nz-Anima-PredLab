@@ -321,6 +321,7 @@ def _write_meta(run_dir: Path, p: Any) -> None:
             "cross_attention_output": STATE.dump_cross_attention_output,
             "mlp_output": STATE.dump_mlp_output,
             "spectrum_final_output": STATE.dump_spectrum_final_output,
+            "baseline_final_output": STATE.dump_baseline_final_output,
         },
         "raw_blocks": sorted(DUMP_RAW_BLOCKS),
         "save_dtype": DUMP_SAVE_DTYPE,
@@ -417,7 +418,7 @@ def _zarr_path(
 ) -> str:
     if tensor_type == "teacache_residual":
         return f"{tensor_type}/slot_{slot if slot is not None else 'unknown'}"
-    if tensor_type == "spectrum_final_output":
+    if tensor_type in {"spectrum_final_output", "baseline_final_output"}:
         return f"{tensor_type}/{decision or 'actual'}"
     if tensor_type in {"block_output", "cross_attention_output", "mlp_output"}:
         suffix = f"{int(block_index):02d}" if block_index is not None else "unknown"
@@ -426,7 +427,11 @@ def _zarr_path(
 
 
 def _should_save_raw(tensor_type: str, block_index: int | None) -> bool:
-    if tensor_type in {"teacache_residual", "spectrum_final_output"}:
+    if tensor_type in {
+        "teacache_residual",
+        "spectrum_final_output",
+        "baseline_final_output",
+    }:
         return True
     if tensor_type in {"block_output", "cross_attention_output", "mlp_output"}:
         return isinstance(block_index, int) and block_index in DUMP_RAW_BLOCKS

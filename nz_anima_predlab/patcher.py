@@ -357,12 +357,12 @@ def _apply_tensor_dump_output_patch() -> PatchResult:
 
         def model_function_wrapper(model_function, args):
             out = model_function(args["input"], args["timestep"], **args["c"])
-            local_call_index = STATE.tensor_dump_spectrum_local_call_index
-            STATE.tensor_dump_spectrum_local_call_index += 1
+            local_call_index = STATE.tensor_dump_baseline_local_call_index
+            STATE.tensor_dump_baseline_local_call_index += 1
             from .tensor_dump import dump_tensor
 
             dump_tensor(
-                "spectrum_final_output",
+                "baseline_final_output",
                 out,
                 logical_step_index=max(0, STATE.denoiser_calls - 1),
                 local_call_index=local_call_index,
@@ -389,7 +389,7 @@ def _apply_tensor_dump_output_patch() -> PatchResult:
 def _should_tensor_dump_output_patch() -> bool:
     return (
         STATE.tensor_dump_active()
-        and STATE.dump_spectrum_final_output
+        and STATE.dump_baseline_final_output
         and not STATE.spectrum_enabled
     )
 

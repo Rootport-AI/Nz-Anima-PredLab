@@ -24,7 +24,7 @@
 
 現在の `script.py` では、トップレベルの `Nz-Anima-PredLab` アコーディオン内に `Debug log mode` サブアコーディオンが存在する。
 
-この中に、以下の5つのチェックボックスを追加する。
+この中に、以下の6つのチェックボックスを追加する。
 
 ```text
 Dump TeaCache residual
@@ -32,6 +32,7 @@ Dump block output
 Dump cross-attention output
 Dump MLP output
 Dump Spectrum final output
+Dump baseline final output
 ```
 
 既存の `Debug log mode` は、従来のコンソールログ設定を移設した場所である。今回の tensor dump も、実験・調査用ログなので、このサブアコーディオンに置く。
@@ -138,7 +139,8 @@ device_before_dump
     "block_output": true,
     "cross_attention_output": true,
     "mlp_output": true,
-    "spectrum_final_output": true
+    "spectrum_final_output": true,
+    "baseline_final_output": true
   }
 }
 ```
@@ -198,6 +200,8 @@ run_20260529_123456_gen0012/
   stats.parquet
   tensors.zarr/
     spectrum_final_output/
+      actual
+    baseline_final_output/
       actual
     teacache_residual/
       slot_0
@@ -259,6 +263,7 @@ dump_block_output: bool = False
 dump_cross_attention_output: bool = False
 dump_mlp_output: bool = False
 dump_spectrum_final_output: bool = False
+dump_baseline_final_output: bool = False
 ```
 
 また、tensor dump 用の runtime 情報を保持する。
@@ -274,7 +279,7 @@ tensor_dump_errors: int = 0
 
 ### 5.3 `script.py`
 
-`Debug log mode` サブアコーディオン内に、5つのチェックボックスを追加する。
+`Debug log mode` サブアコーディオン内に、6つのチェックボックスを追加する。
 
 ```python
 with gr.Accordion("Debug log mode", open=False, elem_id="nzap-debug-panel"):
@@ -304,6 +309,11 @@ with gr.Accordion("Debug log mode", open=False, elem_id="nzap-debug-panel"):
         value=False,
         elem_id="nzap-dump-spectrum-final-output",
     )
+    dump_baseline_final_output = gr.Checkbox(
+        label="Dump baseline final output",
+        value=False,
+        elem_id="nzap-dump-baseline-final-output",
+    )
 ```
 
 各チェックボックスは、ONにしたら親の `Enable Nz-Anima-PredLab` もONになるようにする。
@@ -317,15 +327,15 @@ for control in (...):
     )
 ```
 
-`return [...]` の末尾に5つを追加する。
+`return [...]` の末尾に6つを追加する。
 
 `_apply_ui_args()` の分岐も更新する。
 
 例:
 
 ```python
-if len(script_args) >= 53:
-    STATE.apply_options(*script_args[:53])
+if len(script_args) >= 54:
+    STATE.apply_options(*script_args[:54])
     return
 ```
 
@@ -953,6 +963,7 @@ tensors.zarr/block_output/block_07
 tensors.zarr/cross_attention_output/block_14
 tensors.zarr/mlp_output/block_21
 tensors.zarr/spectrum_final_output/actual
+tensors.zarr/baseline_final_output/actual
 ```
 
 ### 12.2 append方式
@@ -1058,6 +1069,27 @@ Dump Spectrum final output ON でも何も保存されない
 生成は正常終了する
 ```
 
+Baseline final output:
+
+```text
+Spectrum OFF
+Dump baseline final output ON
+```
+
+期待:
+
+```text
+baseline_final_output/actual が作成される
+通常 forward output のみ保存される
+```
+
+Spectrum ONの場合:
+
+```text
+Dump baseline final output ON でも何も保存されない
+生成は正常終了する
+```
+
 ### 14.4 block output dump
 
 条件:
@@ -1126,8 +1158,8 @@ MLP module が見つからない場合: warningのみ、生成は継続
 最初のPRでは、以下を満たせば完了とする。
 
 ```text
-1. Debug log mode に5つのdumpチェックボックスが追加されている
-2. STATEに5つのdumpフラグが追加されている
+1. Debug log mode に6つのdumpチェックボックスが追加されている
+2. STATEに6つのdumpフラグが追加されている
 3. logs/YYYY-MM-DD/run_xxx/ が自動作成される
 4. meta.json が保存される
 5. stats.parquet が保存される
