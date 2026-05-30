@@ -276,7 +276,8 @@ UI:
 動作:
 
 - tensor dump は `Enable Nz-Anima-PredLab=True` かつ `Enable debug log mode=True` の場合だけ有効になる。
-- 保存先は画像出力ディレクトリから `Images/logs/YYYY-MM-DD/run_.../` を推定し、推定できない場合は `logs/YYYY-MM-DD/run_.../` へ fallback する。
+- 保存先は `--gradio-allowed-path` や画像出力ディレクトリから `Images/logs/YYYY-MM-DD/run_.../` を推定し、推定できない場合は `logs/YYYY-MM-DD/run_.../` へ fallback する。
+- run directory 名は `run_YYYYMMDD_HHMMSS_genNNNN` とし、同名が既に存在する場合は `_001`, `_002`, ... を付けて上書きを避ける。
 - 保存構成は `meta.json`、`stats.parquet`、`tensors.zarr/` とする。
 - `zarr` / `pandas` / `pyarrow` が import できない場合はインストールを試みる。失敗した場合は `tensor_dump_unavailable` warning を出し、生成は継続する。
 - block / cross-attention / MLP dump は `TeaCache=False`、`Spectrum=False`、`Enable 2D sparse attention=False`、`Enable attention backend override=False` の場合だけ有効にする。

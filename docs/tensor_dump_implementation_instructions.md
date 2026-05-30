@@ -161,8 +161,8 @@ device_before_dump
 
 推奨方針は以下。
 
-1. `modules.shared.opts.outdir_samples`、`outdir_txt2img_samples`、または生成画像の保存先に近い値を参照する。
-2. その出力先から `Images` 相当の親ディレクトリを推定する。
+1. `--gradio-allowed-path`、`modules.shared.opts.outdir_samples`、`outdir_txt2img_samples`、または生成画像の保存先に近い値を参照する。
+2. StabilityMatrix の `--gradio-allowed-path ...\Images` がある場合はそれを優先し、それ以外は出力先から `Images` 相当の親ディレクトリを推定する。
 3. 推定できない場合は、現在の出力ディレクトリ直下に `logs/YYYY-MM-DD` を作る。
 4. それも失敗した場合は、`Path.cwd() / "logs" / YYYY-MM-DD` にフォールバックする。
 
@@ -187,6 +187,7 @@ StabilityMatrix/Images/logs/2026-05-29/
 ```
 
 run名には時刻と `STATE.generation_index` を含める。
+同名の run directory が既に存在する場合は `_001`, `_002`, ... を付けて新規作成し、既存 dump を上書きしない。
 
 ---
 
@@ -973,15 +974,15 @@ Zarr array は `record_index` 軸に append する。
 初回保存時に shape を確定する。
 
 ```python
-array = group.create_dataset(
+array = group.create_array(
     name,
     shape=(0, *tensor_shape),
     chunks=(1, *chunk_shape),
     dtype=saved_dtype,
-    compressor=...,  # 依存問題があれば省略
-    maxshape=(None, *tensor_shape),
 )
 ```
+
+Zarr v3 では `Group.create_dataset` が存在しない場合があるため、実装では `create_array` を優先し、古い環境では `create_dataset` に fallback する。
 
 Zarr v3 / v2 のAPI差異に注意する。
 プロジェクト環境で使う zarr のバージョンを固定できない場合は、薄いwrapper関数を作る。

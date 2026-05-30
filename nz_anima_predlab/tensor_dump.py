@@ -68,13 +68,24 @@ def ensure_run_dir(p: Any = None) -> Path | None:
         now = datetime.now().astimezone()
         base_dir = _infer_log_base_dir(p, now)
         run_id = f"run_{now:%Y%m%d_%H%M%S}_gen{STATE.generation_index:04d}"
-        run_dir = base_dir / run_id
-        run_dir.mkdir(parents=True, exist_ok=True)
-        return run_dir
+        return _create_unique_run_dir(base_dir, run_id)
     except Exception as exc:
         STATE.tensor_dump_errors += 1
         warning(f"tensor_dump_run_dir_failed reason={_short_error(exc)}")
         return None
+
+
+def _create_unique_run_dir(base_dir: Path, run_id: str) -> Path:
+    base_dir.mkdir(parents=True, exist_ok=True)
+    for attempt in range(1000):
+        suffix = "" if attempt == 0 else f"_{attempt:03d}"
+        run_dir = base_dir / f"{run_id}{suffix}"
+        try:
+            run_dir.mkdir(exist_ok=False)
+            return run_dir
+        except FileExistsError:
+            continue
+    raise RuntimeError(f"could not create unique run directory for {run_id}")
 
 
 def dump_tensor(
@@ -136,8 +147,19 @@ def dump_tensor(
         if save_raw:
             saved = _tensor_for_save(tensor_cpu)
             saved_dtype = str(saved.dtype).replace("torch.", "")
-            _append_zarr(zarr_path, saved)
-            _record_counts_by_path[zarr_path] = record_index + 1
+            try:
+                _append_zarr(zarr_path, saved)
+                _record_counts_by_path[zarr_path] = record_index + 1
+            except Exception as exc:
+                STATE.tensor_dump_errors += 1
+                reason = _short_error(exc)
+                _warn_once(
+                    f"raw_failed_{tensor_type}_{reason}",
+                    f"tensor_dump_raw_failed type={tensor_type} reason={reason}",
+                )
+                zarr_path = ""
+                record_index = -1
+                saved_dtype = ""
         else:
             zarr_path = ""
             record_index = -1
@@ -263,6 +285,7 @@ def _install_dependencies() -> bool:
 
 def _infer_log_base_dir(p: Any, now: datetime) -> Path:
     candidates = []
+    candidates.extend(_gradio_allowed_path_candidates())
     for attr in ("outpath_samples", "outpath_grids", "outdir_samples"):
         value = getattr(p, attr, None) if p is not None else None
         if value:
@@ -271,6 +294,13 @@ def _infer_log_base_dir(p: Any, now: datetime) -> Path:
         from modules import shared
 
         opts = shared.opts
+        cmd_opts = getattr(shared, "cmd_opts", None)
+        for key in ("gradio_allowed_path", "gradio_allowed_paths"):
+            value = getattr(cmd_opts, key, None) if cmd_opts is not None else None
+            if isinstance(value, (list, tuple, set)):
+                candidates.extend(item for item in value if item)
+            elif value:
+                candidates.append(value)
         for key in ("outdir_txt2img_samples", "outdir_samples", "outdir_save"):
             value = getattr(opts, key, None)
             if value:
@@ -278,16 +308,56 @@ def _infer_log_base_dir(p: Any, now: datetime) -> Path:
     except Exception:
         pass
 
-    for value in candidates:
+    paths = [_path_from_candidate(value) for value in candidates]
+    paths = [path for path in paths if path is not None]
+
+    for path in paths:
+        if path.is_absolute() and _contains_path_part(path, "images"):
+            images_dir = _images_dir_from_path(path)
+            return images_dir / "logs" / f"{now:%Y-%m-%d}"
+
+    for path in paths:
+        if path.is_absolute():
+            images_dir = _images_dir_from_path(path)
+            return images_dir / "logs" / f"{now:%Y-%m-%d}"
+
+    for path in paths:
         try:
-            path = Path(str(value)).expanduser()
-            if path.suffix:
-                path = path.parent
+            path = (Path.cwd() / path).resolve()
             images_dir = _images_dir_from_path(path)
             return images_dir / "logs" / f"{now:%Y-%m-%d}"
         except Exception:
             continue
     return Path.cwd() / "logs" / f"{now:%Y-%m-%d}"
+
+
+def _gradio_allowed_path_candidates() -> list[str]:
+    candidates: list[str] = []
+    argv = list(getattr(sys, "argv", []) or [])
+    for index, value in enumerate(argv):
+        text = str(value)
+        if text == "--gradio-allowed-path" and index + 1 < len(argv):
+            candidates.append(str(argv[index + 1]))
+        elif text.startswith("--gradio-allowed-path="):
+            candidates.append(text.split("=", 1)[1])
+    return candidates
+
+
+def _path_from_candidate(value: Any) -> Path | None:
+    if value is None:
+        return None
+    try:
+        path = Path(str(value).strip().strip("\"'")).expanduser()
+        if path.suffix:
+            path = path.parent
+        return path
+    except Exception:
+        return None
+
+
+def _contains_path_part(path: Path, part_name: str) -> bool:
+    lowered = part_name.lower()
+    return any(part.lower() == lowered for part in path.parts)
 
 
 def _images_dir_from_path(path: Path) -> Path:
@@ -404,10 +474,16 @@ def _require_group(group: Any, name: str):
 
 
 def _create_array(group: Any, name: str, shape: tuple[int, ...], chunks: tuple[int, ...], dtype: Any):
+    create_array = getattr(group, "create_array", None)
+    if callable(create_array):
+        try:
+            return create_array(name, shape=shape, chunks=chunks, dtype=dtype)
+        except TypeError:
+            return create_array(name, shape=shape, chunk_shape=chunks, dtype=dtype)
     try:
         return group.create_dataset(name, shape=shape, chunks=chunks, dtype=dtype)
     except TypeError:
-        return group.create_array(name, shape=shape, chunks=chunks, dtype=dtype)
+        return group.create_dataset(name, shape=shape, chunk_shape=chunks, dtype=dtype)
 
 
 def _zarr_path(
