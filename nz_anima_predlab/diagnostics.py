@@ -28,15 +28,6 @@ def _fmt(value: Any) -> str:
     return str(value)
 
 
-def _note_value(value: Any) -> str:
-    text = _fmt(value)
-    if not text:
-        return '""'
-    if any(char.isspace() for char in text) or "," in text:
-        return '"' + text.replace('"', "'") + '"'
-    return text
-
-
 def log_generation_start(p: Any) -> None:
     if not STATE.active():
         return
@@ -79,7 +70,6 @@ def log_generation_start(p: Any) -> None:
     log_lowbit_trace()
     log_model_structure_trace()
     log_experiment_snapshot()
-    log_quality_metric_note()
 
     STATE.generation_logged = True
 
@@ -96,14 +86,6 @@ def log_experiment_snapshot() -> None:
             f"target={STATE.attention_target} "
             f"blocks={STATE.attention_block_start}..{STATE.attention_block_end}"
         )
-        info(
-            "attention_kernel_setting_note="
-            f"requested_backend={STATE.attention_backend} "
-            f"target={_note_value(STATE.attention_target)} "
-            f"block_range={STATE.attention_block_start}..{STATE.attention_block_end} "
-            "actual_backend_is_observed_at_runtime "
-            "numeric_results_are_reported_in=attention_kernel_numeric_row"
-        )
     if STATE.sparse_enabled and not STATE.teacache_enabled and not STATE.spectrum_enabled:
         info(
             "sparse_config="
@@ -113,17 +95,6 @@ def log_experiment_snapshot() -> None:
             f"local_window={STATE.sparse_local_window} "
             f"dilation={STATE.sparse_dilation} "
             f"full_attention_interval={STATE.sparse_full_attention_interval}"
-        )
-        info(
-            "sparse_setting_note="
-            f"backend={_note_value(STATE.sparse_backend)} "
-            "target=self_attention_only "
-            f"block_range={STATE.sparse_block_start}..{STATE.sparse_block_end} "
-            f"step_range={STATE.sparse_step_start}..{STATE.sparse_step_end} "
-            f"local_window={STATE.sparse_local_window} "
-            f"dilation={STATE.sparse_dilation} "
-            f"full_attention_interval={STATE.sparse_full_attention_interval} "
-            "numeric_results_are_reported_in=sparse_numeric_row"
         )
         if STATE.sparse_backend == SPARSE_BACKEND_NATTEN:
             try:
@@ -150,21 +121,6 @@ def log_experiment_snapshot() -> None:
             f"force_full_interval={STATE.teacache_force_full_interval} "
             f"dry_run={STATE.teacache_dry_run}"
         )
-        info(
-            "teacache_setting_note="
-            "decision_metric=relative_l1 "
-            f"modulated_source={STATE.teacache_modulated_source} "
-            f"coefficient_profile={_note_value(STATE.teacache_coefficient_profile)} "
-            f"threshold={STATE.teacache_threshold:.4f} "
-            f"progress_range={STATE.teacache_start_percent:.2f}..{STATE.teacache_end_percent:.2f} "
-            f"cache_device={STATE.teacache_cache_device} "
-            f"max_skip_streak={STATE.teacache_max_skip_streak} "
-            f"force_full_interval={STATE.teacache_force_full_interval} "
-            f"dry_run={STATE.teacache_dry_run} "
-            "first_model_call=always_full "
-            "missing_previous_residual=always_full "
-            "numeric_results_are_reported_in=teacache_numeric_row"
-        )
     if STATE.spectrum_enabled and not STATE.teacache_enabled:
         info(
             "spectrum_config="
@@ -178,30 +134,10 @@ def log_experiment_snapshot() -> None:
             f"stop_progress={STATE.spectrum_stop_progress:.2f} "
             f"dry_run={STATE.spectrum_dry_run}"
         )
-        info(
-            "spectrum_setting_note="
-            "forecaster=chebyshev_ridge_plus_taylor "
-            f"prediction_weight={STATE.spectrum_w:.2f} "
-            f"polynomial_degree={STATE.spectrum_m} "
-            f"ridge_lambda={STATE.spectrum_lambda:.2f} "
-            f"warmup_steps={STATE.spectrum_warmup_steps} "
-            f"window_size={STATE.spectrum_window_size} "
-            f"flex_window={STATE.spectrum_flex_window:.2f} "
-            f"stop_progress={STATE.spectrum_stop_progress:.2f} "
-            f"dry_run={STATE.spectrum_dry_run} "
-            "first_model_call=always_actual "
-            "numeric_results_are_reported_in=spectrum_numeric_row"
-        )
     if STATE.cond_uncond_enabled:
         info(
             "cond_uncond_config="
             f"enabled=True skip_cfg1={STATE.cond_uncond_skip_cfg1} "
-            f"schedule={STATE.cond_uncond_schedule_enabled} "
-            f"guidance_interval={STATE.cond_uncond_guidance_interval}"
-        )
-        info(
-            "cond_uncond_setting_note="
-            f"skip_cfg1={STATE.cond_uncond_skip_cfg1} "
             f"schedule={STATE.cond_uncond_schedule_enabled} "
             f"guidance_interval={STATE.cond_uncond_guidance_interval}"
         )
@@ -212,24 +148,6 @@ def log_experiment_snapshot() -> None:
             f"compile_enabled={STATE.compile_enabled} "
             "reload_note=reload_model_after_changing_reload_required_settings"
         )
-        info(
-            "lowbit_compile_setting_note="
-            f"lowbit_enabled={STATE.lowbit_enabled} "
-            f"compile_enabled={STATE.compile_enabled} "
-            "model_reload_required_after_setting_change=True"
-        )
-
-
-def log_quality_metric_note() -> None:
-    if not STATE.experimental_active():
-        return
-    info(
-        "quality_metric_note="
-        "ssim_lpips_psnr_bd_rate_are_not_computed_by_this_extension "
-        "when_reporting_external_quality_metrics_include="
-        "library,library_version,metric_variant,input_range,normalization,"
-        "color_space,resize_or_crop,reference_image_source"
-    )
 
 
 def log_attention_trace() -> None:
@@ -319,16 +237,6 @@ def log_timing_summary() -> None:
         avg = data["avg_step_time"]
         min_step = data["min_step_time"]
         max_step = data["max_step_time"]
-        _log_numeric_table(
-            "timing",
-            [
-                ("denoiser_calls", data["denoiser_calls"]),
-                ("avg_step_time_s", avg),
-                ("total_sampling_time_s", total),
-                ("min_step_time_s", min_step),
-                ("max_step_time_s", max_step),
-            ],
-        )
         info(
             "denoiser_calls="
             f"{data['denoiser_calls']} avg_step_time={_seconds(avg)} "
@@ -342,17 +250,6 @@ def log_timing_summary() -> None:
             active = is_patched("block_forward_identity")
         except Exception:
             active = "unknown"
-        _log_numeric_table(
-            "identity_patch",
-            [
-                ("calls", STATE.identity_patch_calls),
-                ("num_blocks", STATE.identity_patch_num_blocks),
-                ("logged_calls", STATE.identity_patch_logged_calls),
-                ("shape_mismatches", STATE.identity_patch_shape_mismatches),
-                ("errors", STATE.identity_patch_errors),
-                ("active", active),
-            ],
-        )
         info(
             "identity_patch_summary="
             f"calls={STATE.identity_patch_calls} "
@@ -364,17 +261,6 @@ def log_timing_summary() -> None:
         )
     if STATE.sparse_enabled and not STATE.teacache_enabled and not STATE.spectrum_enabled:
         active = _is_patch_active("sparse_attention")
-        _log_numeric_table(
-            "sparse",
-            [
-                ("block_calls", STATE.sparse_block_calls),
-                ("attention_calls", STATE.sparse_attention_calls),
-                ("fallbacks", STATE.sparse_fallbacks),
-                ("errors", STATE.sparse_errors),
-                ("num_blocks", STATE.sparse_num_blocks),
-                ("active", active),
-            ],
-        )
         info(
             "sparse_summary="
             f"block_calls={STATE.sparse_block_calls} "
@@ -390,19 +276,6 @@ def log_timing_summary() -> None:
         and (not STATE.sparse_enabled or STATE.spectrum_enabled)
     ):
         active = _is_patch_active("attention_kernel")
-        _log_numeric_table(
-            "attention_kernel",
-            [
-                ("calls", STATE.attention_kernel_calls),
-                ("block_calls", STATE.attention_kernel_block_calls),
-                ("fallbacks", STATE.attention_kernel_fallbacks),
-                ("errors", STATE.attention_kernel_errors),
-                ("internal_fallbacks", STATE.attention_kernel_internal_fallbacks),
-                ("internal_errors", STATE.attention_kernel_internal_errors),
-                ("num_blocks", STATE.attention_kernel_num_blocks),
-                ("active", active),
-            ],
-        )
         info(
             "attention_kernel_summary="
             f"calls={STATE.attention_kernel_calls} "
@@ -424,23 +297,6 @@ def log_timing_summary() -> None:
             STATE.teacache_skips / total_decisions
             if total_decisions
             else 0.0
-        )
-        _log_numeric_table(
-            "teacache",
-            [
-                ("model_calls", STATE.teacache_model_calls),
-                ("full_calcs", STATE.teacache_full_calcs),
-                ("skips", STATE.teacache_skips),
-                ("dry_run_skips", STATE.teacache_dry_run_skips),
-                ("skip_rate", skip_rate),
-                ("first_full_calcs", STATE.teacache_first_full_calcs),
-                ("forced_full_calcs", STATE.teacache_forced_full_calcs),
-                ("fallbacks", STATE.teacache_fallbacks),
-                ("errors", STATE.teacache_errors),
-                ("num_blocks", STATE.teacache_num_blocks),
-                ("active", active),
-                ("dry_run", STATE.teacache_dry_run),
-            ],
         )
         info(
             "teacache_summary="
@@ -465,20 +321,6 @@ def log_timing_summary() -> None:
             STATE.spectrum_forecasts / total_decisions
             if total_decisions
             else 0.0
-        )
-        _log_numeric_table(
-            "spectrum",
-            [
-                ("model_calls", STATE.spectrum_model_calls),
-                ("actual_forwards", STATE.spectrum_actual_forwards),
-                ("forecasts", STATE.spectrum_forecasts),
-                ("dry_run_forecasts", STATE.spectrum_dry_run_forecasts),
-                ("forecast_rate", forecast_rate),
-                ("fallbacks", STATE.spectrum_fallbacks),
-                ("errors", STATE.spectrum_errors),
-                ("active", active),
-                ("dry_run", STATE.spectrum_dry_run),
-            ],
         )
         info(
             "spectrum_summary="
@@ -508,23 +350,6 @@ def _seconds(value: float | int | None) -> str:
     if value is None:
         return "None"
     return f"{float(value):.3f}s"
-
-
-def _log_numeric_table(label: str, fields: list[tuple[str, Any]]) -> None:
-    info(f"{label}_numeric_header=" + "\t".join(name for name, _ in fields))
-    info(f"{label}_numeric_row=" + "\t".join(_numeric_cell(value) for _, value in fields))
-
-
-def _numeric_cell(value: Any) -> str:
-    if value is None or value == "unknown":
-        return ""
-    if isinstance(value, bool):
-        return "1" if value else "0"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        return f"{value:.6g}"
-    return _fmt(value)
 
 
 def _fmt_counts(value: dict[str, int]) -> str:
