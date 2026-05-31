@@ -18,6 +18,12 @@ The extension started as a diagnostic tool and now includes opt-in experimental 
 
 Logs are printed to the StabilityMatrix / Forge Neo console with the `[Nz-Anima-PredLab]` prefix.
 
+For experiment reporting, numeric result rows and setting notes are separated:
+
+- `*_numeric_header` / `*_numeric_row` are tab-separated and intended for spreadsheet copy/paste.
+- `*_setting_note` records the decision metric and experiment parameters for citation or paper/table notes.
+- `quality_metric_note` reminds that SSIM / LPIPS / PSNR / BD-Rate are not computed by this extension and need their own metric settings when reported.
+
 ## TeaCache Notes
 
 TeaCache patches `backend.nn.anima.Anima._forward` when available, otherwise `backend.nn.anima.Anima.forward` as used by current Forge Neo. It skips the Anima block stack on selected sampling steps and reuses the previous full-calculation residual.

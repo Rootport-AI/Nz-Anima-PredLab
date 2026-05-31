@@ -829,12 +829,29 @@ Verbose trace でのみ出す項目:
 
 高速化実験版でも、初期実装では JSON / CSV benchmark log を保存しない。実験結果はコンソール summary を主な確認手段にする。
 
+Excel などへ数値をコピーしやすいよう、summary とは別にタブ区切りの数値専用ログを出す。
+
+- `*_numeric_header`: 列名のみ。
+- `*_numeric_row`: 数値のみ。bool は `1` / `0`、未取得値は空欄にする。
+- 数値専用ログには backend 名、preset 名、Note、unavailable reason などの説明文字列を混ぜない。
+
+論文、記事、表への転載に必要な実験条件は、数値欄とは別に `*_setting_note` として出す。
+
+- TeaCache は `decision_metric=relative_l1`、`modulated_source`、`coefficient_profile`、`threshold`、`progress_range`、`cache_device`、`max_skip_streak`、`force_full_interval`、`dry_run`、`first_model_call=always_full`、`missing_previous_residual=always_full` を明示する。
+- Spectrum は `forecaster=chebyshev_ridge_plus_taylor`、`prediction_weight`、`polynomial_degree`、`ridge_lambda`、`warmup_steps`、`window_size`、`flex_window`、`stop_progress`、`dry_run`、`first_model_call=always_actual` を明示する。
+- Sparse attention は backend、self-attention only、block/step range、local window、dilation、full attention interval を明示する。
+- Attention kernel は requested backend、target、block range を明示し、actual backend は runtime summary で確認する。
+
+Nz-Anima-PredLab は初期実装では SSIM / LPIPS / PSNR / BD-Rate などの外部画質指標を計算しない。これらを論文や比較表へ転載する場合は、別途 `quality_metric_note` 相当として、library、library version、metric variant、input range、normalization、color space、resize/crop、reference image source を明示する。
+
 重要な summary:
 
 - `total_sampling_time`
 - `avg_step_time`
 - `denoiser_calls`
 - 実験機能が有効な場合の設定 snapshot
+- `*_numeric_header` / `*_numeric_row`
+- `*_setting_note`
 
 画質比較は初期実装では目視確認とする。baseline / patched pair の自動保存は行わない。
 
@@ -1038,7 +1055,10 @@ TeaCache experiment:
 
 ```text
 [Nz-Anima-PredLab] teacache_config=enabled=True preset=Balanced threshold=0.0700 progress=0.05..0.95 cache_device=cuda source=first_block_shift coefficient_profile=Anima 2B 30step first_block_shift max_skip_streak=0 force_full_interval=0 dry_run=False
+[Nz-Anima-PredLab] teacache_setting_note=decision_metric=relative_l1 modulated_source=first_block_shift coefficient_profile="Anima 2B 30step first_block_shift" threshold=0.0700 progress_range=0.05..0.95 cache_device=cuda max_skip_streak=0 force_full_interval=0 dry_run=False first_model_call=always_full missing_previous_residual=always_full numeric_results_are_reported_in=teacache_numeric_row
 [Nz-Anima-PredLab] teacache_call=call=1 step=0 progress=0.000 decision=full reason=first_call rel_l1=0:None,1:None threshold=0.0700 dry_run=False
+[Nz-Anima-PredLab] teacache_numeric_header=model_calls	full_calcs	skips	dry_run_skips	skip_rate	first_full_calcs	forced_full_calcs	fallbacks	errors	num_blocks	active	dry_run
+[Nz-Anima-PredLab] teacache_numeric_row=32	28	4	0	0.125	1	0	0	0	28	1	0
 [Nz-Anima-PredLab] teacache_summary=model_calls=32 full_calcs=28 skips=4 dry_run_skips=0 skip_rate=0.125 first_full_calcs=1 forced_full_calcs=0 fallbacks=0 errors=0 num_blocks=28 active=True dry_run=False unavailable_reason=None
 ```
 
@@ -1046,7 +1066,10 @@ Spectrum experiment:
 
 ```text
 [Nz-Anima-PredLab] spectrum_config=enabled=True preset=Balanced w=0.20 m=16 lambda=0.50 warmup=6 window=2 flex=0.00 stop_progress=0.80 dry_run=False
+[Nz-Anima-PredLab] spectrum_setting_note=forecaster=chebyshev_ridge_plus_taylor prediction_weight=0.20 polynomial_degree=16 ridge_lambda=0.50 warmup_steps=6 window_size=2 flex_window=0.00 stop_progress=0.80 dry_run=False first_model_call=always_actual numeric_results_are_reported_in=spectrum_numeric_row
 [Nz-Anima-PredLab] spectrum_call=call=1 step=0 progress=0.000 decision=actual reason=first_call history=0 window=2 dry_run=False
+[Nz-Anima-PredLab] spectrum_numeric_header=model_calls	actual_forwards	forecasts	dry_run_forecasts	forecast_rate	fallbacks	errors	active	dry_run
+[Nz-Anima-PredLab] spectrum_numeric_row=32	24	8	0	0.25	0	0	1	0
 [Nz-Anima-PredLab] spectrum_summary=model_calls=32 actual_forwards=24 forecasts=8 forecast_rate=0.250 fallbacks=0 errors=0 active=True dry_run=False unavailable_reason=None
 ```
 
