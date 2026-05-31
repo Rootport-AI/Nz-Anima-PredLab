@@ -50,6 +50,7 @@ localizations/
 *.onnx
 
 # Test and benchmark artifacts
+analysis/
 benchmarks/results/
 profile/
 profiles/

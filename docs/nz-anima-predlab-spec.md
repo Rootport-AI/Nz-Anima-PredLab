@@ -328,6 +328,13 @@ UI behavior:
 - `Rel L1 threshold` / `Start progress` / `End progress` のいずれかを手動で変更した場合、`TeaCache preset` は自動的に `Custom` へ切り替わる。
 - `Custom` を選んだ場合は既存の slider 値を維持する。
 
+UjiCache scaffold:
+
+- `UjiCache` は `TeaCache` accordion の下に置くサブ accordion とする。
+- `UjiCache` は Unified Jump-step Imputation の実験用 UI scaffold であり、TeaCache の代替中間テンソル計算を将来差し替えるための作業領域とする。
+- 初期追加では、TeaCache と同じ control 群を `nzap-ujicache-*` element id で複製する。
+- 初期追加では、UjiCache control は runtime state、generation args、patcher、TeaCache decision logic へ接続しない。
+
 必須動作:
 
 - 生成または batch の最初の model call / sampling step では、利用可能な `previous_residual` が存在しないため、必ず full calculation を行う。

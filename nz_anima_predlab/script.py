@@ -273,6 +273,110 @@ class Script(scripts.Script):
                         inputs=[],
                         outputs=[teacache_preset],
                     )
+                with gr.Accordion("UjiCache", open=False, elem_id="nzap-ujicache-panel"):
+                    ujicache_enabled = gr.Checkbox(
+                        label="Enable UjiCache experiment",
+                        value=False,
+                        elem_id="nzap-ujicache-enable",
+                    )
+                    ujicache_preset = gr.Dropdown(
+                        label="UjiCache preset",
+                        choices=TEACACHE_PRESETS,
+                        value=TEACACHE_PRESET_BALANCED,
+                        elem_id="nzap-ujicache-preset",
+                    )
+                    ujicache_threshold = gr.Slider(
+                        label="Rel L1 threshold",
+                        minimum=0.0,
+                        maximum=1.0,
+                        step=0.005,
+                        value=0.07,
+                        elem_id="nzap-ujicache-threshold",
+                    )
+                    ujicache_start_percent = gr.Slider(
+                        label="Start progress",
+                        minimum=0.0,
+                        maximum=1.0,
+                        step=0.01,
+                        value=0.05,
+                        elem_id="nzap-ujicache-start-percent",
+                    )
+                    ujicache_end_percent = gr.Slider(
+                        label="End progress",
+                        minimum=0.0,
+                        maximum=1.0,
+                        step=0.01,
+                        value=0.95,
+                        elem_id="nzap-ujicache-end-percent",
+                    )
+                    ujicache_cache_device = gr.Radio(
+                        label="Cache device",
+                        choices=TEACACHE_CACHE_DEVICES,
+                        value=TEACACHE_CACHE_DEVICE_CUDA,
+                        elem_id="nzap-ujicache-cache-device",
+                    )
+                    ujicache_modulated_source = gr.Dropdown(
+                        label="Modulated source",
+                        choices=TEACACHE_MODULATED_SOURCES,
+                        value=TEACACHE_SOURCE_FIRST_BLOCK_SHIFT,
+                        elem_id="nzap-ujicache-modulated-source",
+                    )
+                    ujicache_coefficient_profile = gr.Dropdown(
+                        label="Coefficient profile",
+                        choices=TEACACHE_COEFFICIENT_PROFILES,
+                        value=TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT,
+                        elem_id="nzap-ujicache-coefficient-profile",
+                    )
+                    ujicache_max_skip_streak = gr.Slider(
+                        label="Max skip streak (0 = off)",
+                        minimum=0,
+                        maximum=64,
+                        step=1,
+                        value=0,
+                        elem_id="nzap-ujicache-max-skip-streak",
+                    )
+                    ujicache_force_full_interval = gr.Slider(
+                        label="Force full interval (0 = off)",
+                        minimum=0,
+                        maximum=64,
+                        step=1,
+                        value=0,
+                        elem_id="nzap-ujicache-force-full-interval",
+                    )
+                    ujicache_dry_run = gr.Checkbox(
+                        label="Dry run",
+                        value=False,
+                        elem_id="nzap-ujicache-dry-run",
+                    )
+                    ujicache_verbose_trace = gr.Checkbox(
+                        label="Verbose UjiCache trace",
+                        value=False,
+                        elem_id="nzap-ujicache-verbose-trace",
+                    )
+                    ujicache_enabled.change(
+                        fn=_enable_parent_if_child_enabled,
+                        inputs=[ujicache_enabled],
+                        outputs=[enabled],
+                    )
+                    ujicache_preset.change(
+                        fn=_teacache_preset_updates,
+                        inputs=[ujicache_preset],
+                        outputs=[
+                            ujicache_threshold,
+                            ujicache_start_percent,
+                            ujicache_end_percent,
+                        ],
+                    )
+                    for control in (
+                        ujicache_threshold,
+                        ujicache_start_percent,
+                        ujicache_end_percent,
+                    ):
+                        control.change(
+                            fn=_teacache_mark_custom,
+                            inputs=[],
+                            outputs=[ujicache_preset],
+                        )
             with gr.Accordion("Spectrum", open=False, elem_id="nzap-spectrum-panel"):
                 spectrum_enabled = gr.Checkbox(
                     label="Enable Spectrum experiment",
