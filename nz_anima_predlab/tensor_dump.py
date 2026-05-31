@@ -387,6 +387,7 @@ def _write_meta(run_dir: Path, p: Any) -> None:
         "cfg_scale": _safe_float(getattr(p, "cfg_scale", None)),
         "dump_flags": {
             "teacache_residual": STATE.dump_teacache_residual,
+            "ujicache_residual": STATE.dump_ujicache_residual,
             "block_output": STATE.dump_block_output,
             "cross_attention_output": STATE.dump_cross_attention_output,
             "mlp_output": STATE.dump_mlp_output,

@@ -172,6 +172,7 @@ class RuntimeState:
     spectrum_dry_run: bool = False
     spectrum_verbose_trace: bool = False
     dump_teacache_residual: bool = False
+    dump_ujicache_residual: bool = False
     dump_block_output: bool = False
     dump_cross_attention_output: bool = False
     dump_mlp_output: bool = False
@@ -259,6 +260,7 @@ class RuntimeState:
     tensor_dump_cross_attention_local_call_index: int = 0
     tensor_dump_mlp_local_call_index: int = 0
     tensor_dump_teacache_local_call_index: int = 0
+    tensor_dump_ujicache_local_call_index: int = 0
     tensor_dump_spectrum_local_call_index: int = 0
     tensor_dump_baseline_local_call_index: int = 0
     tensor_dump_current_context: dict[str, Any] | None = None
@@ -365,6 +367,7 @@ class RuntimeState:
         dump_mlp_output: bool = False,
         dump_spectrum_final_output: bool = False,
         dump_baseline_final_output: bool = False,
+        dump_ujicache_residual: bool = False,
     ) -> None:
         self.enabled = bool(enabled)
         self.debug_log_enabled = bool(debug_log_enabled)
@@ -482,6 +485,7 @@ class RuntimeState:
         self.spectrum_verbose_trace = bool(spectrum_verbose_trace)
         self._apply_spectrum_preset()
         self.dump_teacache_residual = bool(dump_teacache_residual)
+        self.dump_ujicache_residual = bool(dump_ujicache_residual)
         self.dump_block_output = bool(dump_block_output)
         self.dump_cross_attention_output = bool(dump_cross_attention_output)
         self.dump_mlp_output = bool(dump_mlp_output)
@@ -540,6 +544,7 @@ class RuntimeState:
     def tensor_dump_requested(self) -> bool:
         return (
             self.dump_teacache_residual
+            or self.dump_ujicache_residual
             or self.dump_block_output
             or self.dump_cross_attention_output
             or self.dump_mlp_output
@@ -677,6 +682,7 @@ class RuntimeState:
         self.tensor_dump_cross_attention_local_call_index = 0
         self.tensor_dump_mlp_local_call_index = 0
         self.tensor_dump_teacache_local_call_index = 0
+        self.tensor_dump_ujicache_local_call_index = 0
         self.tensor_dump_spectrum_local_call_index = 0
         self.tensor_dump_baseline_local_call_index = 0
         self.tensor_dump_current_context = None

@@ -77,6 +77,11 @@ class Script(scripts.Script):
                     value=False,
                     elem_id="nzap-dump-teacache-residual",
                 )
+                dump_ujicache_residual = gr.Checkbox(
+                    label="Dump UjiCache residual",
+                    value=False,
+                    elem_id="nzap-dump-ujicache-residual",
+                )
                 dump_block_output = gr.Checkbox(
                     label="Dump block output",
                     value=False,
@@ -128,6 +133,7 @@ class Script(scripts.Script):
                 )
                 for control in (
                     dump_teacache_residual,
+                    dump_ujicache_residual,
                     dump_block_output,
                     dump_cross_attention_output,
                     dump_mlp_output,
@@ -714,6 +720,7 @@ class Script(scripts.Script):
             dump_mlp_output,
             dump_spectrum_final_output,
             dump_baseline_final_output,
+            dump_ujicache_residual,
         ]
 
     def process_before_every_sampling(self, p, *script_args, **kwargs):
@@ -740,6 +747,9 @@ class Script(scripts.Script):
 
 
 def _apply_ui_args(script_args) -> None:
+    if len(script_args) >= 72:
+        STATE.apply_options(*script_args[:72])
+        return
     if len(script_args) >= 71:
         STATE.apply_options(*script_args[:71])
         return
@@ -964,6 +974,15 @@ def _configure_generation_patches() -> None:
         STATE.tensor_dump_warned_reasons.add("teacache_residual_requires_teacache")
         warning("tensor_dump_teacache_residual_inactive reason=teacache_disabled")
 
+    if (
+        STATE.tensor_dump_active()
+        and STATE.dump_ujicache_residual
+        and not STATE.ujicache_enabled
+        and "ujicache_residual_requires_ujicache" not in STATE.tensor_dump_warned_reasons
+    ):
+        STATE.tensor_dump_warned_reasons.add("ujicache_residual_requires_ujicache")
+        warning("tensor_dump_ujicache_residual_inactive reason=ujicache_disabled")
+
     if STATE.tensor_dump_block_level_active():
         if (
             STATE.teacache_enabled
@@ -984,6 +1003,8 @@ def _tensor_dump_will_save() -> bool:
     if not STATE.tensor_dump_active():
         return False
     if STATE.dump_teacache_residual and STATE.teacache_enabled:
+        return True
+    if STATE.dump_ujicache_residual and STATE.ujicache_enabled:
         return True
     if STATE.dump_spectrum_final_output and STATE.spectrum_enabled:
         return True

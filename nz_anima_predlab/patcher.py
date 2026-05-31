@@ -1547,6 +1547,14 @@ def _ujicache_forward_body(
                 **block_kwargs,
             )
         residual = x_B_T_H_W_D.to(cache_device) - ori_x
+        _dump_ujicache_residual(
+            residual,
+            cond_or_uncond,
+            batch_per_slot,
+            step_index,
+            timesteps_B_T,
+            cache_device,
+        )
         for slot_index, key in enumerate(cond_or_uncond):
             item = _ujicache_slot(cache, int(key))
             start = slot_index * batch_per_slot
@@ -2146,6 +2154,44 @@ def _dump_teacache_residual(
             timestep_value=timestep,
             teacache_model_call=STATE.teacache_model_calls,
             extra={"cache_device": str(cache_device)},
+        )
+
+
+def _dump_ujicache_residual(
+    residual: Any,
+    cond_or_uncond: list[int],
+    batch_per_slot: int,
+    step_index: int,
+    timestep: Any,
+    cache_device: Any,
+) -> None:
+    if not (
+        STATE.tensor_dump_active()
+        and STATE.dump_ujicache_residual
+        and STATE.ujicache_enabled
+    ):
+        return
+    from .tensor_dump import dump_tensor
+
+    for slot_index, key in enumerate(cond_or_uncond):
+        start = slot_index * batch_per_slot
+        end = start + batch_per_slot
+        local_call_index = STATE.tensor_dump_ujicache_local_call_index
+        STATE.tensor_dump_ujicache_local_call_index += 1
+        dump_tensor(
+            "ujicache_residual",
+            residual[start:end],
+            logical_step_index=step_index,
+            local_call_index=local_call_index,
+            call_index=local_call_index,
+            slot=int(key),
+            decision="full",
+            timestep_value=timestep,
+            extra={
+                "cache_device": str(cache_device),
+                "ujicache_model_call": STATE.ujicache_model_calls,
+                "formula": STATE.ujicache_formula,
+            },
         )
 
 
