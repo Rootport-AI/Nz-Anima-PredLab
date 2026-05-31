@@ -80,6 +80,18 @@ TEACACHE_COEFFICIENTS_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT = [
     0.31229336331906893,
 ]
 
+UJICACHE_PRESET_CUSTOM = "Custom"
+UJICACHE_PRESETS = [UJICACHE_PRESET_CUSTOM]
+
+UJICACHE_FORMULA_TEACACHE = "TeaCache (residual only)"
+UJICACHE_FORMULA_LINEAR = "Linear extrapolation"
+UJICACHE_FORMULA_TAYLOR2 = "Taylor2 curve"
+UJICACHE_FORMULAS = [
+    UJICACHE_FORMULA_TEACACHE,
+    UJICACHE_FORMULA_LINEAR,
+    UJICACHE_FORMULA_TAYLOR2,
+]
+
 SPECTRUM_PRESET_SAFE = "Safe"
 SPECTRUM_PRESET_BALANCED = "Balanced"
 SPECTRUM_PRESET_AGGRESSIVE = "Aggressive"
@@ -131,6 +143,23 @@ class RuntimeState:
     teacache_force_full_interval: int = 0
     teacache_dry_run: bool = False
     teacache_verbose_trace: bool = False
+    ujicache_enabled: bool = False
+    ujicache_preset: str = UJICACHE_PRESET_CUSTOM
+    ujicache_threshold: float = 0.07
+    ujicache_start_percent: float = 0.05
+    ujicache_end_percent: float = 0.95
+    ujicache_formula: str = UJICACHE_FORMULA_TEACACHE
+    ujicache_use_prediction_after_progress: float = 0.70
+    ujicache_apply_prediction_from_skip: int = 2
+    ujicache_prediction_strength: float = 0.50
+    ujicache_taylor2_curve_strength: float = 0.25
+    ujicache_cache_device: str = TEACACHE_CACHE_DEVICE_CUDA
+    ujicache_modulated_source: str = TEACACHE_SOURCE_FIRST_BLOCK_SHIFT
+    ujicache_coefficient_profile: str = TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT
+    ujicache_max_skip_streak: int = 0
+    ujicache_force_full_interval: int = 0
+    ujicache_dry_run: bool = False
+    ujicache_verbose_trace: bool = False
     spectrum_enabled: bool = False
     spectrum_preset: str = SPECTRUM_PRESET_BALANCED
     spectrum_w: float = 0.20
@@ -198,6 +227,20 @@ class RuntimeState:
     teacache_logged_calls: int = 0
     teacache_num_blocks: int | None = None
     teacache_unavailable_reason: str | None = None
+    ujicache_model_calls: int = 0
+    ujicache_full_calcs: int = 0
+    ujicache_skips: int = 0
+    ujicache_prediction_used: int = 0
+    ujicache_fallback_used: int = 0
+    ujicache_dry_run_predictions: int = 0
+    ujicache_first_full_calcs: int = 0
+    ujicache_forced_full_calcs: int = 0
+    ujicache_fallbacks: int = 0
+    ujicache_errors: int = 0
+    ujicache_logged_calls: int = 0
+    ujicache_num_blocks: int | None = None
+    ujicache_unavailable_reason: str | None = None
+    ujicache_fallback_reasons: dict[str, int] = field(default_factory=dict)
     spectrum_model_calls: int = 0
     spectrum_actual_forwards: int = 0
     spectrum_forecasts: int = 0
@@ -286,6 +329,23 @@ class RuntimeState:
         teacache_force_full_interval: int = 0,
         teacache_dry_run: bool = False,
         teacache_verbose_trace: bool = False,
+        ujicache_enabled: bool = False,
+        ujicache_preset: str = UJICACHE_PRESET_CUSTOM,
+        ujicache_threshold: float = 0.07,
+        ujicache_start_percent: float = 0.05,
+        ujicache_end_percent: float = 0.95,
+        ujicache_formula: str = UJICACHE_FORMULA_TEACACHE,
+        ujicache_use_prediction_after_progress: float = 0.70,
+        ujicache_apply_prediction_from_skip: int = 2,
+        ujicache_prediction_strength: float = 0.50,
+        ujicache_taylor2_curve_strength: float = 0.25,
+        ujicache_cache_device: str = TEACACHE_CACHE_DEVICE_CUDA,
+        ujicache_modulated_source: str = TEACACHE_SOURCE_FIRST_BLOCK_SHIFT,
+        ujicache_coefficient_profile: str = TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT,
+        ujicache_max_skip_streak: int = 0,
+        ujicache_force_full_interval: int = 0,
+        ujicache_dry_run: bool = False,
+        ujicache_verbose_trace: bool = False,
         spectrum_enabled: bool = False,
         spectrum_preset: str = SPECTRUM_PRESET_BALANCED,
         spectrum_w: float = 0.20,
@@ -364,8 +424,49 @@ class RuntimeState:
         self.teacache_dry_run = bool(teacache_dry_run)
         self.teacache_verbose_trace = bool(teacache_verbose_trace)
         self._apply_teacache_preset()
+        self.ujicache_enabled = bool(ujicache_enabled)
+        self.ujicache_preset = (
+            ujicache_preset if ujicache_preset in UJICACHE_PRESETS else UJICACHE_PRESET_CUSTOM
+        )
+        self.ujicache_threshold = _clamp_float(ujicache_threshold, 0.0, 1.0)
+        self.ujicache_start_percent = _clamp_float(ujicache_start_percent, 0.0, 1.0)
+        self.ujicache_end_percent = _clamp_float(ujicache_end_percent, 0.0, 1.0)
+        self.ujicache_formula = (
+            ujicache_formula if ujicache_formula in UJICACHE_FORMULAS else UJICACHE_FORMULA_TEACACHE
+        )
+        self.ujicache_use_prediction_after_progress = _clamp_float(
+            ujicache_use_prediction_after_progress,
+            0.0,
+            1.0,
+        )
+        self.ujicache_apply_prediction_from_skip = _clamp_int(
+            ujicache_apply_prediction_from_skip,
+            1,
+            3,
+        )
+        self.ujicache_prediction_strength = _clamp_float(ujicache_prediction_strength, 0.0, 1.0)
+        self.ujicache_taylor2_curve_strength = _clamp_float(ujicache_taylor2_curve_strength, 0.0, 1.0)
+        self.ujicache_cache_device = (
+            ujicache_cache_device if ujicache_cache_device in TEACACHE_CACHE_DEVICES else TEACACHE_CACHE_DEVICE_CUDA
+        )
+        self.ujicache_modulated_source = (
+            ujicache_modulated_source
+            if ujicache_modulated_source in TEACACHE_MODULATED_SOURCES
+            else TEACACHE_SOURCE_FIRST_BLOCK_SHIFT
+        )
+        self.ujicache_coefficient_profile = (
+            ujicache_coefficient_profile
+            if ujicache_coefficient_profile in TEACACHE_COEFFICIENT_PROFILES
+            else TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT
+        )
+        self.ujicache_max_skip_streak = _clamp_int(ujicache_max_skip_streak, 0, 64)
+        self.ujicache_force_full_interval = _clamp_int(ujicache_force_full_interval, 0, 64)
+        self.ujicache_dry_run = bool(ujicache_dry_run)
+        self.ujicache_verbose_trace = bool(ujicache_verbose_trace)
+        if self.ujicache_enabled:
+            self.teacache_enabled = False
         self.spectrum_enabled = bool(spectrum_enabled)
-        if self.teacache_enabled and self.spectrum_enabled:
+        if (self.teacache_enabled or self.ujicache_enabled) and self.spectrum_enabled:
             self.spectrum_enabled = False
         self.spectrum_preset = (
             spectrum_preset if spectrum_preset in SPECTRUM_PRESETS else SPECTRUM_PRESET_BALANCED
@@ -401,6 +502,11 @@ class RuntimeState:
                 self.teacache_end_percent,
                 self.teacache_start_percent,
             )
+        if self.ujicache_start_percent > self.ujicache_end_percent:
+            self.ujicache_start_percent, self.ujicache_end_percent = (
+                self.ujicache_end_percent,
+                self.ujicache_start_percent,
+            )
 
     def active(self) -> bool:
         return self.enabled and (
@@ -408,6 +514,7 @@ class RuntimeState:
             or self.attention_override_active()
             or self.sparse_enabled
             or self.teacache_enabled
+            or self.ujicache_enabled
             or self.spectrum_enabled
             or self.cond_uncond_enabled
             or self.lowbit_enabled
@@ -420,6 +527,7 @@ class RuntimeState:
             self.attention_override_active()
             or self.sparse_enabled
             or self.teacache_enabled
+            or self.ujicache_enabled
             or self.spectrum_enabled
             or self.cond_uncond_enabled
             or self.lowbit_enabled
@@ -537,6 +645,20 @@ class RuntimeState:
         self.teacache_logged_calls = 0
         self.teacache_num_blocks = None
         self.teacache_unavailable_reason = None
+        self.ujicache_model_calls = 0
+        self.ujicache_full_calcs = 0
+        self.ujicache_skips = 0
+        self.ujicache_prediction_used = 0
+        self.ujicache_fallback_used = 0
+        self.ujicache_dry_run_predictions = 0
+        self.ujicache_first_full_calcs = 0
+        self.ujicache_forced_full_calcs = 0
+        self.ujicache_fallbacks = 0
+        self.ujicache_errors = 0
+        self.ujicache_logged_calls = 0
+        self.ujicache_num_blocks = None
+        self.ujicache_unavailable_reason = None
+        self.ujicache_fallback_reasons.clear()
         self.spectrum_model_calls = 0
         self.spectrum_actual_forwards = 0
         self.spectrum_forecasts = 0
@@ -568,6 +690,8 @@ class RuntimeState:
             self.status = "identity-patch"
         elif self.teacache_enabled:
             self.status = "experimental-teacache"
+        elif self.ujicache_enabled:
+            self.status = "experimental-ujicache"
         elif self.spectrum_enabled:
             self.status = "experimental-spectrum"
         elif self.attention_override_active():

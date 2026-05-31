@@ -36,6 +36,10 @@ from .state import (
     TEACACHE_PRESETS,
     TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT,
     TEACACHE_SOURCE_FIRST_BLOCK_SHIFT,
+    UJICACHE_FORMULA_TEACACHE,
+    UJICACHE_FORMULAS,
+    UJICACHE_PRESET_CUSTOM,
+    UJICACHE_PRESETS,
 )
 from .timing import start_sampling
 
@@ -281,8 +285,8 @@ class Script(scripts.Script):
                     )
                     ujicache_preset = gr.Dropdown(
                         label="UjiCache preset",
-                        choices=TEACACHE_PRESETS,
-                        value=TEACACHE_PRESET_BALANCED,
+                        choices=UJICACHE_PRESETS,
+                        value=UJICACHE_PRESET_CUSTOM,
                         elem_id="nzap-ujicache-preset",
                     )
                     ujicache_threshold = gr.Slider(
@@ -308,6 +312,44 @@ class Script(scripts.Script):
                         step=0.01,
                         value=0.95,
                         elem_id="nzap-ujicache-end-percent",
+                    )
+                    ujicache_formula = gr.Dropdown(
+                        label="Prediction formula",
+                        choices=UJICACHE_FORMULAS,
+                        value=UJICACHE_FORMULA_TEACACHE,
+                        elem_id="nzap-ujicache-formula",
+                    )
+                    ujicache_use_prediction_after_progress = gr.Slider(
+                        label="Use prediction after progress",
+                        minimum=0.0,
+                        maximum=1.0,
+                        step=0.01,
+                        value=0.70,
+                        elem_id="nzap-ujicache-use-prediction-after-progress",
+                    )
+                    ujicache_apply_prediction_from_skip = gr.Slider(
+                        label="Apply prediction from skip #",
+                        minimum=1,
+                        maximum=3,
+                        step=1,
+                        value=2,
+                        elem_id="nzap-ujicache-apply-prediction-from-skip",
+                    )
+                    ujicache_prediction_strength = gr.Slider(
+                        label="Prediction strength",
+                        minimum=0.0,
+                        maximum=1.0,
+                        step=0.01,
+                        value=0.50,
+                        elem_id="nzap-ujicache-prediction-strength",
+                    )
+                    ujicache_taylor2_curve_strength = gr.Slider(
+                        label="Taylor2 curve strength",
+                        minimum=0.0,
+                        maximum=1.0,
+                        step=0.01,
+                        value=0.25,
+                        elem_id="nzap-ujicache-taylor2-curve-strength",
                     )
                     ujicache_cache_device = gr.Radio(
                         label="Cache device",
@@ -353,30 +395,6 @@ class Script(scripts.Script):
                         value=False,
                         elem_id="nzap-ujicache-verbose-trace",
                     )
-                    ujicache_enabled.change(
-                        fn=_enable_parent_if_child_enabled,
-                        inputs=[ujicache_enabled],
-                        outputs=[enabled],
-                    )
-                    ujicache_preset.change(
-                        fn=_teacache_preset_updates,
-                        inputs=[ujicache_preset],
-                        outputs=[
-                            ujicache_threshold,
-                            ujicache_start_percent,
-                            ujicache_end_percent,
-                        ],
-                    )
-                    for control in (
-                        ujicache_threshold,
-                        ujicache_start_percent,
-                        ujicache_end_percent,
-                    ):
-                        control.change(
-                            fn=_teacache_mark_custom,
-                            inputs=[],
-                            outputs=[ujicache_preset],
-                        )
             with gr.Accordion("Spectrum", open=False, elem_id="nzap-spectrum-panel"):
                 spectrum_enabled = gr.Checkbox(
                     label="Enable Spectrum experiment",
@@ -485,12 +503,17 @@ class Script(scripts.Script):
                 teacache_enabled.change(
                     fn=_teacache_enable_updates,
                     inputs=[teacache_enabled],
-                    outputs=[spectrum_enabled, enabled],
+                    outputs=[spectrum_enabled, ujicache_enabled, enabled],
                 )
                 spectrum_enabled.change(
                     fn=_spectrum_enable_updates,
                     inputs=[spectrum_enabled],
-                    outputs=[teacache_enabled, enabled],
+                    outputs=[teacache_enabled, ujicache_enabled, enabled],
+                )
+                ujicache_enabled.change(
+                    fn=_ujicache_enable_updates,
+                    inputs=[ujicache_enabled],
+                    outputs=[teacache_enabled, spectrum_enabled, enabled],
                 )
             with gr.Accordion("2D Sparse", open=False, elem_id="nzap-sparse-panel"):
                 sparse_enabled = gr.Checkbox(
@@ -655,6 +678,23 @@ class Script(scripts.Script):
             teacache_force_full_interval,
             teacache_dry_run,
             teacache_verbose_trace,
+            ujicache_enabled,
+            ujicache_preset,
+            ujicache_threshold,
+            ujicache_start_percent,
+            ujicache_end_percent,
+            ujicache_formula,
+            ujicache_use_prediction_after_progress,
+            ujicache_apply_prediction_from_skip,
+            ujicache_prediction_strength,
+            ujicache_taylor2_curve_strength,
+            ujicache_cache_device,
+            ujicache_modulated_source,
+            ujicache_coefficient_profile,
+            ujicache_max_skip_streak,
+            ujicache_force_full_interval,
+            ujicache_dry_run,
+            ujicache_verbose_trace,
             spectrum_enabled,
             spectrum_preset,
             spectrum_w,
@@ -700,17 +740,20 @@ class Script(scripts.Script):
 
 
 def _apply_ui_args(script_args) -> None:
+    if len(script_args) >= 71:
+        STATE.apply_options(*script_args[:71])
+        return
     if len(script_args) >= 54:
-        STATE.apply_options(*script_args[:54])
+        STATE.apply_options(*_insert_default_ujicache_args(script_args[:54]))
         return
     if len(script_args) >= 53:
-        STATE.apply_options(*script_args[:53])
+        STATE.apply_options(*_insert_default_ujicache_args(script_args[:53]))
         return
     if len(script_args) >= 48:
-        STATE.apply_options(*script_args[:48])
+        STATE.apply_options(*_insert_default_ujicache_args(script_args[:48]))
         return
     if len(script_args) >= 46:
-        STATE.apply_options(*script_args[:46])
+        STATE.apply_options(*_insert_default_ujicache_args(script_args[:46]))
         return
     if len(script_args) >= 35:
         STATE.apply_options(*script_args[:35])
@@ -722,6 +765,30 @@ def _apply_ui_args(script_args) -> None:
         STATE.apply_options(*script_args[:4])
         return
     STATE.refresh_settings()
+
+
+def _insert_default_ujicache_args(script_args):
+    ujicache_defaults = [
+        False,
+        UJICACHE_PRESET_CUSTOM,
+        0.07,
+        0.05,
+        0.95,
+        UJICACHE_FORMULA_TEACACHE,
+        0.70,
+        2,
+        0.50,
+        0.25,
+        TEACACHE_CACHE_DEVICE_CUDA,
+        TEACACHE_SOURCE_FIRST_BLOCK_SHIFT,
+        TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT,
+        0,
+        0,
+        False,
+        False,
+    ]
+    args = list(script_args)
+    return args[:35] + ujicache_defaults + args[35:]
 
 
 def _begin_generation(p, script_args, source: str) -> None:
@@ -759,7 +826,30 @@ def _begin_generation(p, script_args, source: str) -> None:
             warning(f"tensor_dump_initialize_failed reason={exc}")
 
     _configure_generation_patches()
+    _apply_infotext_metadata(p)
     log_generation_start(p)
+
+
+def _apply_infotext_metadata(p) -> None:
+    if not STATE.ujicache_enabled:
+        return
+    try:
+        params = getattr(p, "extra_generation_params", None)
+        if not isinstance(params, dict):
+            params = {}
+            setattr(p, "extra_generation_params", params)
+        params["UjiCache enabled"] = True
+        params["UjiCache formula"] = STATE.ujicache_formula
+        params["UjiCache use_prediction_after_progress"] = (
+            f"{STATE.ujicache_use_prediction_after_progress:.2f}"
+        )
+        params["UjiCache apply_prediction_from_skip"] = STATE.ujicache_apply_prediction_from_skip
+        params["UjiCache prediction_strength"] = f"{STATE.ujicache_prediction_strength:.2f}"
+        params["UjiCache taylor2_curve_strength"] = (
+            f"{STATE.ujicache_taylor2_curve_strength:.2f}"
+        )
+    except Exception as exc:
+        warning(f"ujicache_metadata_failed reason={exc}")
 
 
 def _configure_generation_patches() -> None:
@@ -771,15 +861,27 @@ def _configure_generation_patches() -> None:
         remove_patch("attention_kernel")
         remove_patch("sparse_attention")
         remove_patch("teacache")
+        remove_patch("ujicache")
         remove_patch("spectrum")
         apply_patch("block_forward_identity")
         return
 
     remove_patch("block_forward_identity")
-    if STATE.teacache_enabled:
+    if STATE.ujicache_enabled:
         remove_patch("block_structure_trace")
         remove_patch("attention_kernel")
         remove_patch("sparse_attention")
+        remove_patch("teacache")
+        remove_patch("spectrum")
+        result = apply_patch("ujicache")
+        if not result.ok:
+            STATE.ujicache_unavailable_reason = result.message
+            warning(f"ujicache_patch_unavailable reason={result.message}")
+    elif STATE.teacache_enabled:
+        remove_patch("block_structure_trace")
+        remove_patch("attention_kernel")
+        remove_patch("sparse_attention")
+        remove_patch("ujicache")
         remove_patch("spectrum")
         result = apply_patch("teacache")
         if not result.ok:
@@ -787,6 +889,7 @@ def _configure_generation_patches() -> None:
             warning(f"teacache_patch_unavailable reason={result.message}")
     elif STATE.spectrum_enabled:
         remove_patch("teacache")
+        remove_patch("ujicache")
         remove_patch("block_structure_trace")
         remove_patch("sparse_attention")
         result = apply_patch("spectrum")
@@ -799,12 +902,14 @@ def _configure_generation_patches() -> None:
             remove_patch("attention_kernel")
     elif STATE.sparse_enabled:
         remove_patch("teacache")
+        remove_patch("ujicache")
         remove_patch("spectrum")
         remove_patch("block_structure_trace")
         remove_patch("attention_kernel")
         apply_patch("sparse_attention")
     else:
         remove_patch("teacache")
+        remove_patch("ujicache")
         remove_patch("spectrum")
         remove_patch("sparse_attention")
         if STATE.attention_override_active():
@@ -817,6 +922,7 @@ def _configure_generation_patches() -> None:
         STATE.mode == MODE_DIAGNOSE
         and STATE.verbose_diagnose_log
         and not STATE.teacache_enabled
+        and not STATE.ujicache_enabled
         and not STATE.spectrum_enabled
         and not STATE.sparse_enabled
         and not STATE.attention_override_active()
@@ -861,6 +967,7 @@ def _configure_generation_patches() -> None:
     if STATE.tensor_dump_block_level_active():
         if (
             STATE.teacache_enabled
+            or STATE.ujicache_enabled
             or STATE.spectrum_enabled
             or STATE.sparse_enabled
             or STATE.attention_override_active()
@@ -885,6 +992,7 @@ def _tensor_dump_will_save() -> bool:
     if STATE.tensor_dump_block_level_active():
         return not (
             STATE.teacache_enabled
+            or STATE.ujicache_enabled
             or STATE.spectrum_enabled
             or STATE.sparse_enabled
             or STATE.attention_override_active()
@@ -898,6 +1006,7 @@ def _remove_generation_patches() -> None:
     remove_patch("attention_kernel")
     remove_patch("sparse_attention")
     remove_patch("teacache")
+    remove_patch("ujicache")
     remove_patch("spectrum")
     remove_patch("tensor_dump")
     remove_patch("tensor_dump_output")
@@ -907,6 +1016,7 @@ def _requires_supported_model() -> bool:
     return (
         STATE.mode == MODE_IDENTITY_PATCH
         or STATE.teacache_enabled
+        or STATE.ujicache_enabled
         or STATE.sparse_enabled
         or STATE.attention_override_active()
         or STATE.tensor_dump_block_level_active()
@@ -969,14 +1079,20 @@ def _spectrum_mark_custom():
 
 def _teacache_enable_updates(child_enabled: bool):
     if child_enabled:
-        return False, True
-    return gr.update(), gr.update()
+        return False, False, True
+    return gr.update(), gr.update(), gr.update()
 
 
 def _spectrum_enable_updates(child_enabled: bool):
     if child_enabled:
-        return False, True
-    return gr.update(), gr.update()
+        return False, False, True
+    return gr.update(), gr.update(), gr.update()
+
+
+def _ujicache_enable_updates(child_enabled: bool):
+    if child_enabled:
+        return False, False, True
+    return gr.update(), gr.update(), gr.update()
 
 
 def _enable_parent_if_child_enabled(child_enabled: bool):

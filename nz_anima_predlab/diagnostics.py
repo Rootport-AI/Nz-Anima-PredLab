@@ -78,6 +78,7 @@ def log_experiment_snapshot() -> None:
     if (
         STATE.attention_override_active()
         and not STATE.teacache_enabled
+        and not STATE.ujicache_enabled
         and (not STATE.sparse_enabled or STATE.spectrum_enabled)
     ):
         info(
@@ -86,7 +87,12 @@ def log_experiment_snapshot() -> None:
             f"target={STATE.attention_target} "
             f"blocks={STATE.attention_block_start}..{STATE.attention_block_end}"
         )
-    if STATE.sparse_enabled and not STATE.teacache_enabled and not STATE.spectrum_enabled:
+    if (
+        STATE.sparse_enabled
+        and not STATE.teacache_enabled
+        and not STATE.ujicache_enabled
+        and not STATE.spectrum_enabled
+    ):
         info(
             "sparse_config="
             f"enabled=True backend={STATE.sparse_backend} "
@@ -121,7 +127,25 @@ def log_experiment_snapshot() -> None:
             f"force_full_interval={STATE.teacache_force_full_interval} "
             f"dry_run={STATE.teacache_dry_run}"
         )
-    if STATE.spectrum_enabled and not STATE.teacache_enabled:
+    if STATE.ujicache_enabled:
+        info(
+            "ujicache_config="
+            f"enabled=True preset={STATE.ujicache_preset} "
+            f"formula={STATE.ujicache_formula} "
+            f"threshold={STATE.ujicache_threshold:.4f} "
+            f"progress={STATE.ujicache_start_percent:.2f}..{STATE.ujicache_end_percent:.2f} "
+            f"use_prediction_after={STATE.ujicache_use_prediction_after_progress:.2f} "
+            f"apply_from_skip={STATE.ujicache_apply_prediction_from_skip} "
+            f"prediction_strength={STATE.ujicache_prediction_strength:.2f} "
+            f"taylor2_curve_strength={STATE.ujicache_taylor2_curve_strength:.2f} "
+            f"cache_device={STATE.ujicache_cache_device} "
+            f"source={STATE.ujicache_modulated_source} "
+            f"coefficient_profile={STATE.ujicache_coefficient_profile} "
+            f"max_skip_streak={STATE.ujicache_max_skip_streak} "
+            f"force_full_interval={STATE.ujicache_force_full_interval} "
+            f"dry_run={STATE.ujicache_dry_run}"
+        )
+    if STATE.spectrum_enabled and not STATE.teacache_enabled and not STATE.ujicache_enabled:
         info(
             "spectrum_config="
             f"enabled=True preset={STATE.spectrum_preset} "
@@ -219,15 +243,18 @@ def log_timing_summary() -> None:
         or (
             STATE.sparse_enabled
             and not STATE.teacache_enabled
+            and not STATE.ujicache_enabled
             and not STATE.spectrum_enabled
         )
         or (
             STATE.attention_override_active()
             and not STATE.teacache_enabled
+            and not STATE.ujicache_enabled
             and (not STATE.sparse_enabled or STATE.spectrum_enabled)
         )
         or STATE.teacache_enabled
-        or (STATE.spectrum_enabled and not STATE.teacache_enabled)
+        or STATE.ujicache_enabled
+        or (STATE.spectrum_enabled and not STATE.teacache_enabled and not STATE.ujicache_enabled)
     )
     if not STATE.print_timing_log and not should_print_summaries:
         return
@@ -259,7 +286,12 @@ def log_timing_summary() -> None:
             f"errors={STATE.identity_patch_errors} active={active} "
             "target=backend.nn.anima.Block.forward behavior=call_original"
         )
-    if STATE.sparse_enabled and not STATE.teacache_enabled and not STATE.spectrum_enabled:
+    if (
+        STATE.sparse_enabled
+        and not STATE.teacache_enabled
+        and not STATE.ujicache_enabled
+        and not STATE.spectrum_enabled
+    ):
         active = _is_patch_active("sparse_attention")
         info(
             "sparse_summary="
@@ -273,6 +305,7 @@ def log_timing_summary() -> None:
     if (
         STATE.attention_override_active()
         and not STATE.teacache_enabled
+        and not STATE.ujicache_enabled
         and (not STATE.sparse_enabled or STATE.spectrum_enabled)
     ):
         active = _is_patch_active("attention_kernel")
@@ -314,7 +347,35 @@ def log_timing_summary() -> None:
             f"dry_run={STATE.teacache_dry_run} "
             f"unavailable_reason={_fmt(STATE.teacache_unavailable_reason)}"
         )
-    if STATE.spectrum_enabled and not STATE.teacache_enabled:
+    if STATE.ujicache_enabled:
+        active = _is_patch_active("ujicache")
+        total_decisions = STATE.ujicache_full_calcs + STATE.ujicache_skips
+        skip_rate = (
+            STATE.ujicache_skips / total_decisions
+            if total_decisions
+            else 0.0
+        )
+        info(
+            "ujicache_summary="
+            f"model_calls={STATE.ujicache_model_calls} "
+            f"full_calcs={STATE.ujicache_full_calcs} "
+            f"skips={STATE.ujicache_skips} "
+            f"prediction_used={STATE.ujicache_prediction_used} "
+            f"fallback_used={STATE.ujicache_fallback_used} "
+            f"dry_run_predictions={STATE.ujicache_dry_run_predictions} "
+            f"skip_rate={skip_rate:.3f} "
+            f"first_full_calcs={STATE.ujicache_first_full_calcs} "
+            f"forced_full_calcs={STATE.ujicache_forced_full_calcs} "
+            f"fallbacks={STATE.ujicache_fallbacks} "
+            f"errors={STATE.ujicache_errors} "
+            f"fallback_reasons={_fmt_counts(STATE.ujicache_fallback_reasons)} "
+            f"num_blocks={STATE.ujicache_num_blocks} "
+            f"active={active} "
+            f"formula={STATE.ujicache_formula} "
+            f"dry_run={STATE.ujicache_dry_run} "
+            f"unavailable_reason={_fmt(STATE.ujicache_unavailable_reason)}"
+        )
+    if STATE.spectrum_enabled and not STATE.teacache_enabled and not STATE.ujicache_enabled:
         active = _is_patch_active("spectrum")
         total_decisions = STATE.spectrum_actual_forwards + STATE.spectrum_forecasts
         forecast_rate = (
@@ -341,6 +402,7 @@ def _should_warn_unsupported_model() -> bool:
     return (
         STATE.mode == MODE_IDENTITY_PATCH
         or STATE.teacache_enabled
+        or STATE.ujicache_enabled
         or STATE.sparse_enabled
         or STATE.attention_override_active()
     )
