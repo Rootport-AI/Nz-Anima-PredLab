@@ -138,6 +138,8 @@ def log_experiment_snapshot() -> None:
             f"apply_from_skip={STATE.ujicache_apply_prediction_from_skip} "
             f"prediction_strength={STATE.ujicache_prediction_strength:.2f} "
             f"taylor2_curve_strength={STATE.ujicache_taylor2_curve_strength:.2f} "
+            f"slope_ema_smoothing={STATE.ujicache_slope_ema_smoothing:.2f} "
+            f"curve_ema_smoothing={STATE.ujicache_curve_ema_smoothing:.2f} "
             f"cache_device={STATE.ujicache_cache_device} "
             f"source={STATE.ujicache_modulated_source} "
             f"coefficient_profile={STATE.ujicache_coefficient_profile} "
@@ -372,6 +374,8 @@ def log_timing_summary() -> None:
             f"num_blocks={STATE.ujicache_num_blocks} "
             f"active={active} "
             f"formula={STATE.ujicache_formula} "
+            f"slope_ema_smoothing={STATE.ujicache_slope_ema_smoothing:.2f} "
+            f"curve_ema_smoothing={STATE.ujicache_curve_ema_smoothing:.2f} "
             f"dry_run={STATE.ujicache_dry_run} "
             f"unavailable_reason={_fmt(STATE.ujicache_unavailable_reason)}"
         )

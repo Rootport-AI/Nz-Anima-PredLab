@@ -36,7 +36,9 @@ from .state import (
     TEACACHE_PRESETS,
     TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT,
     TEACACHE_SOURCE_FIRST_BLOCK_SHIFT,
+    UJICACHE_FORMULA_LINEAR,
     UJICACHE_FORMULA_TEACACHE,
+    UJICACHE_FORMULA_TAYLOR2,
     UJICACHE_FORMULAS,
     UJICACHE_PRESET_CUSTOM,
     UJICACHE_PRESETS,
@@ -330,7 +332,8 @@ class Script(scripts.Script):
                     minimum=0.0,
                     maximum=1.0,
                     step=0.01,
-                    value=0.70,
+                    value=0.0,
+                    interactive=False,
                     elem_id="nzap-ujicache-use-prediction-after-progress",
                 )
                 ujicache_apply_prediction_from_skip = gr.Slider(
@@ -339,6 +342,7 @@ class Script(scripts.Script):
                     maximum=3,
                     step=1,
                     value=2,
+                    interactive=False,
                     elem_id="nzap-ujicache-apply-prediction-from-skip",
                 )
                 ujicache_prediction_strength = gr.Slider(
@@ -347,6 +351,7 @@ class Script(scripts.Script):
                     maximum=1.0,
                     step=0.01,
                     value=0.50,
+                    interactive=False,
                     elem_id="nzap-ujicache-prediction-strength",
                 )
                 ujicache_taylor2_curve_strength = gr.Slider(
@@ -355,7 +360,26 @@ class Script(scripts.Script):
                     maximum=1.0,
                     step=0.01,
                     value=0.25,
+                    interactive=False,
                     elem_id="nzap-ujicache-taylor2-curve-strength",
+                )
+                ujicache_slope_ema_smoothing = gr.Slider(
+                    label="Slope EMA Smoothing",
+                    minimum=0.0,
+                    maximum=0.99,
+                    step=0.01,
+                    value=0.0,
+                    interactive=False,
+                    elem_id="nzap-ujicache-slope-ema-smoothing",
+                )
+                ujicache_curve_ema_smoothing = gr.Slider(
+                    label="Curve EMA Smoothing",
+                    minimum=0.0,
+                    maximum=0.99,
+                    step=0.01,
+                    value=0.0,
+                    interactive=False,
+                    elem_id="nzap-ujicache-curve-ema-smoothing",
                 )
                 ujicache_cache_device = gr.Radio(
                     label="Cache device",
@@ -400,6 +424,30 @@ class Script(scripts.Script):
                     label="Verbose UjiCache trace",
                     value=False,
                     elem_id="nzap-ujicache-verbose-trace",
+                )
+                ujicache_formula.change(
+                    fn=_ujicache_prediction_control_updates,
+                    inputs=[ujicache_formula, ujicache_slope_ema_smoothing],
+                    outputs=[
+                        ujicache_use_prediction_after_progress,
+                        ujicache_apply_prediction_from_skip,
+                        ujicache_prediction_strength,
+                        ujicache_taylor2_curve_strength,
+                        ujicache_slope_ema_smoothing,
+                        ujicache_curve_ema_smoothing,
+                    ],
+                )
+                ujicache_slope_ema_smoothing.change(
+                    fn=_ujicache_prediction_control_updates,
+                    inputs=[ujicache_formula, ujicache_slope_ema_smoothing],
+                    outputs=[
+                        ujicache_use_prediction_after_progress,
+                        ujicache_apply_prediction_from_skip,
+                        ujicache_prediction_strength,
+                        ujicache_taylor2_curve_strength,
+                        ujicache_slope_ema_smoothing,
+                        ujicache_curve_ema_smoothing,
+                    ],
                 )
             with gr.Accordion("Spectrum", open=False, elem_id="nzap-spectrum-panel"):
                 spectrum_enabled = gr.Checkbox(
@@ -694,6 +742,8 @@ class Script(scripts.Script):
             ujicache_apply_prediction_from_skip,
             ujicache_prediction_strength,
             ujicache_taylor2_curve_strength,
+            ujicache_slope_ema_smoothing,
+            ujicache_curve_ema_smoothing,
             ujicache_cache_device,
             ujicache_modulated_source,
             ujicache_coefficient_profile,
@@ -747,11 +797,17 @@ class Script(scripts.Script):
 
 
 def _apply_ui_args(script_args) -> None:
+    if len(script_args) >= 74:
+        STATE.apply_options(*script_args[:74])
+        return
+    if len(script_args) >= 73:
+        STATE.apply_options(*script_args[:73])
+        return
     if len(script_args) >= 72:
-        STATE.apply_options(*script_args[:72])
+        STATE.apply_options(*_insert_default_ujicache_ema_args(script_args[:72]))
         return
     if len(script_args) >= 71:
-        STATE.apply_options(*script_args[:71])
+        STATE.apply_options(*_insert_default_ujicache_ema_args(script_args[:71]))
         return
     if len(script_args) >= 54:
         STATE.apply_options(*_insert_default_ujicache_args(script_args[:54]))
@@ -785,10 +841,12 @@ def _insert_default_ujicache_args(script_args):
         0.05,
         0.95,
         UJICACHE_FORMULA_TEACACHE,
-        0.70,
+        0.0,
         2,
         0.50,
         0.25,
+        0.0,
+        0.0,
         TEACACHE_CACHE_DEVICE_CUDA,
         TEACACHE_SOURCE_FIRST_BLOCK_SHIFT,
         TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT,
@@ -799,6 +857,11 @@ def _insert_default_ujicache_args(script_args):
     ]
     args = list(script_args)
     return args[:35] + ujicache_defaults + args[35:]
+
+
+def _insert_default_ujicache_ema_args(script_args):
+    args = list(script_args)
+    return args[:45] + [0.0, 0.0] + args[45:]
 
 
 def _begin_generation(p, script_args, source: str) -> None:
@@ -858,6 +921,8 @@ def _apply_infotext_metadata(p) -> None:
         params["UjiCache taylor2_curve_strength"] = (
             f"{STATE.ujicache_taylor2_curve_strength:.2f}"
         )
+        params["UjiCache slope_ema_smoothing"] = f"{STATE.ujicache_slope_ema_smoothing:.2f}"
+        params["UjiCache curve_ema_smoothing"] = f"{STATE.ujicache_curve_ema_smoothing:.2f}"
     except Exception as exc:
         warning(f"ujicache_metadata_failed reason={exc}")
 
@@ -1096,6 +1161,23 @@ def _spectrum_preset_updates(preset: str):
 
 def _spectrum_mark_custom():
     return SPECTRUM_PRESET_CUSTOM
+
+
+def _ujicache_prediction_control_updates(formula: str, slope_ema_smoothing: float):
+    uses_prediction = formula in (UJICACHE_FORMULA_LINEAR, UJICACHE_FORMULA_TAYLOR2)
+    uses_taylor = formula == UJICACHE_FORMULA_TAYLOR2
+    try:
+        slope = float(slope_ema_smoothing)
+    except Exception:
+        slope = 0.0
+    return (
+        gr.update(interactive=uses_prediction),
+        gr.update(interactive=uses_prediction),
+        gr.update(interactive=uses_prediction),
+        gr.update(interactive=uses_taylor),
+        gr.update(interactive=uses_prediction),
+        gr.update(interactive=uses_taylor and slope > 0.0),
+    )
 
 
 def _teacache_enable_updates(child_enabled: bool):

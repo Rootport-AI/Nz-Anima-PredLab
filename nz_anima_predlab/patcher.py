@@ -1266,6 +1266,8 @@ def _apply_ujicache_patch() -> PatchResult:
         f"apply_from_skip={STATE.ujicache_apply_prediction_from_skip} "
         f"prediction_strength={STATE.ujicache_prediction_strength:.2f} "
         f"taylor2_curve_strength={STATE.ujicache_taylor2_curve_strength:.2f} "
+        f"slope_ema_smoothing={STATE.ujicache_slope_ema_smoothing:.2f} "
+        f"curve_ema_smoothing={STATE.ujicache_curve_ema_smoothing:.2f} "
         f"cache_device={STATE.ujicache_cache_device} source={STATE.ujicache_modulated_source}"
     )
     return PatchResult(True, kind, "applied")
@@ -1580,9 +1582,11 @@ def _ujicache_forward_body(
             skip_streak=0,
             slot_actions={},
             slot_reasons={},
+            slot_notes={},
+            slot_ema_info={},
         )
     else:
-        slot_actions, slot_reasons, late_phase, skip_streak = _ujicache_apply_residual(
+        slot_actions, slot_reasons, slot_notes, slot_ema_info, late_phase, skip_streak = _ujicache_apply_residual(
             x_B_T_H_W_D,
             cache,
             cond_or_uncond,
@@ -1613,6 +1617,8 @@ def _ujicache_forward_body(
             skip_streak=skip_streak,
             slot_actions=slot_actions,
             slot_reasons=slot_reasons,
+            slot_notes=slot_notes,
+            slot_ema_info=slot_ema_info,
         )
 
     x_B_T_H_W_O = model.final_layer(
@@ -1782,6 +1788,10 @@ def _ujicache_slot(cache: dict[str, Any], key: int) -> dict[str, Any]:
             "previous_modulated_input": None,
             "previous_residual": None,
             "residual_history": [],
+            "previous_velocity": None,
+            "previous_velocity_time": None,
+            "velocity_ema": None,
+            "acceleration_ema": None,
         }
     return slots[key]
 
@@ -1968,17 +1978,26 @@ def _ujicache_apply_residual(
     batch_per_slot: int,
     step_index: int,
     progress: float,
-) -> tuple[dict[int, str], dict[int, str | None], bool, int]:
+) -> tuple[
+    dict[int, str],
+    dict[int, str | None],
+    dict[int, str | None],
+    dict[int, dict[str, Any]],
+    bool,
+    int,
+]:
     skip_streak = int(cache.get("skip_streak", 0)) + 1
     late_phase = progress > STATE.ujicache_use_prediction_after_progress
     slot_actions: dict[int, str] = {}
     slot_reasons: dict[int, str | None] = {}
+    slot_notes: dict[int, str | None] = {}
+    slot_ema_info: dict[int, dict[str, Any]] = {}
     for slot_index, key in enumerate(cond_or_uncond):
         key = int(key)
         start = slot_index * batch_per_slot
         end = (slot_index + 1) * batch_per_slot
         target_slice = x[start:end]
-        residual, action, reason = _ujicache_residual_for_slot(
+        residual, action, reason, note, ema_info = _ujicache_residual_for_slot(
             _ujicache_slot(cache, key),
             target_slice,
             step_index,
@@ -1988,7 +2007,9 @@ def _ujicache_apply_residual(
         x[start:end] = target_slice + residual.to(x.device)
         slot_actions[key] = action
         slot_reasons[key] = reason
-    return slot_actions, slot_reasons, late_phase, skip_streak
+        slot_notes[key] = note
+        slot_ema_info[key] = ema_info
+    return slot_actions, slot_reasons, slot_notes, slot_ema_info, late_phase, skip_streak
 
 
 def _ujicache_residual_for_slot(
@@ -1997,7 +2018,8 @@ def _ujicache_residual_for_slot(
     step_index: int,
     skip_streak: int,
     late_phase: bool,
-) -> tuple[Any, str, str | None]:
+) -> tuple[Any, str, str | None, str | None, dict[str, Any]]:
+    ema_info = _ujicache_ema_info(slot, step_index)
     previous = slot.get("previous_residual")
     if previous is None:
         raise RuntimeError("missing previous_residual")
@@ -2008,25 +2030,32 @@ def _ujicache_residual_for_slot(
 
     formula = STATE.ujicache_formula
     if formula == UJICACHE_FORMULA_TEACACHE:
-        return previous.to(target_slice.device), "fallback", "formula"
+        return previous.to(target_slice.device), "fallback", "formula", None, ema_info
 
     prediction_allowed = late_phase or skip_streak >= STATE.ujicache_apply_prediction_from_skip
     if not prediction_allowed:
-        return previous.to(target_slice.device), "fallback", "streak"
+        return previous.to(target_slice.device), "fallback", "streak", None, ema_info
 
     try:
+        prediction_note = None
         if formula == UJICACHE_FORMULA_LINEAR:
-            prediction = _ujicache_predict_linear(slot, step_index, previous)
+            if STATE.ujicache_slope_ema_smoothing <= 0.0:
+                prediction = _ujicache_predict_linear(slot, step_index, previous)
+            else:
+                prediction, prediction_note = _ujicache_predict_linear_ema(slot, step_index, previous)
         elif formula == UJICACHE_FORMULA_TAYLOR2:
-            prediction = _ujicache_predict_taylor2(slot, step_index, previous)
+            if STATE.ujicache_slope_ema_smoothing <= 0.0:
+                prediction = _ujicache_predict_taylor2(slot, step_index, previous)
+            else:
+                prediction, prediction_note = _ujicache_predict_taylor2_ema(slot, step_index, previous)
         else:
-            return previous.to(target_slice.device), "fallback", "formula"
+            return previous.to(target_slice.device), "fallback", "formula", None, ema_info
         prediction = _ujicache_validate_prediction(prediction, previous, target_slice)
-        return prediction.to(target_slice.device), "prediction", None
+        return prediction.to(target_slice.device), "prediction", None, prediction_note, ema_info
     except _UjiCachePredictionFallback as exc:
-        return previous.to(target_slice.device), "fallback", exc.reason
+        return previous.to(target_slice.device), "fallback", exc.reason, None, ema_info
     except Exception:
-        return previous.to(target_slice.device), "fallback", "prediction_error"
+        return previous.to(target_slice.device), "fallback", "prediction_error", None, ema_info
 
 
 class _UjiCachePredictionFallback(Exception):
@@ -2036,6 +2065,7 @@ class _UjiCachePredictionFallback(Exception):
 
 
 def _ujicache_record_residual(slot: dict[str, Any], step_index: int, residual: Any) -> None:
+    _ujicache_update_ema(slot, step_index, residual)
     history = slot.setdefault("residual_history", [])
     history.append(
         {
@@ -2045,6 +2075,57 @@ def _ujicache_record_residual(slot: dict[str, Any], step_index: int, residual: A
     )
     if len(history) > 5:
         del history[:-5]
+
+
+def _ujicache_update_ema(slot: dict[str, Any], step_index: int, residual: Any) -> None:
+    history = slot.get("residual_history") or []
+    if not history:
+        return
+    previous_item = history[-1]
+    try:
+        t_prev = float(previous_item["step_index"])
+        t_now = float(step_index)
+        dt = t_now - t_prev
+        if dt <= 0.0:
+            return
+        previous_residual = previous_item["residual"]
+        if getattr(previous_residual, "shape", None) != getattr(residual, "shape", None):
+            return
+        v_obs = (residual.detach().float() - previous_residual.float()) / dt
+        v_time = (t_prev + t_now) / 2.0
+        previous_velocity = slot.get("previous_velocity")
+        previous_velocity_time = slot.get("previous_velocity_time")
+        if (
+            previous_velocity is not None
+            and previous_velocity_time is not None
+            and getattr(previous_velocity, "shape", None) == getattr(v_obs, "shape", None)
+        ):
+            dt_v = v_time - float(previous_velocity_time)
+            if dt_v > 0.0:
+                a_obs = (v_obs - previous_velocity.to(v_obs.device).float()) / dt_v
+                acceleration_ema = slot.get("acceleration_ema")
+                beta_a = STATE.ujicache_curve_ema_smoothing
+                if acceleration_ema is None or getattr(acceleration_ema, "shape", None) != getattr(a_obs, "shape", None):
+                    slot["acceleration_ema"] = a_obs.detach()
+                else:
+                    slot["acceleration_ema"] = (
+                        beta_a * acceleration_ema.to(a_obs.device).float()
+                        + (1.0 - beta_a) * a_obs
+                    ).detach()
+
+        velocity_ema = slot.get("velocity_ema")
+        beta_v = STATE.ujicache_slope_ema_smoothing
+        if velocity_ema is None or getattr(velocity_ema, "shape", None) != getattr(v_obs, "shape", None):
+            slot["velocity_ema"] = v_obs.detach()
+        else:
+            slot["velocity_ema"] = (
+                beta_v * velocity_ema.to(v_obs.device).float()
+                + (1.0 - beta_v) * v_obs
+            ).detach()
+        slot["previous_velocity"] = v_obs.detach()
+        slot["previous_velocity_time"] = v_time
+    except Exception:
+        return
 
 
 def _ujicache_predict_linear(slot: dict[str, Any], step_index: int, previous: Any):
@@ -2062,6 +2143,82 @@ def _ujicache_predict_taylor2(slot: dict[str, Any], step_index: int, previous: A
     raw_prediction = (1.0 - curve) * linear_prediction + curve * quadratic_prediction
     previous_f32 = previous.float()
     return previous_f32 + STATE.ujicache_prediction_strength * (raw_prediction - previous_f32)
+
+
+def _ujicache_predict_linear_ema(
+    slot: dict[str, Any],
+    step_index: int,
+    previous: Any,
+) -> tuple[Any, str | None]:
+    dt_pred, velocity_ema = _ujicache_ema_velocity(slot, step_index, previous)
+    previous_f32 = previous.float()
+    raw_prediction = previous_f32 + dt_pred * velocity_ema
+    return (
+        previous_f32
+        + STATE.ujicache_prediction_strength * (raw_prediction - previous_f32),
+        None,
+    )
+
+
+def _ujicache_predict_taylor2_ema(
+    slot: dict[str, Any],
+    step_index: int,
+    previous: Any,
+) -> tuple[Any, str | None]:
+    dt_pred, velocity_ema = _ujicache_ema_velocity(slot, step_index, previous)
+    previous_f32 = previous.float()
+    linear_prediction = previous_f32 + dt_pred * velocity_ema
+    acceleration_ema = slot.get("acceleration_ema")
+    if acceleration_ema is None:
+        raw_prediction = linear_prediction
+        prediction_note = "taylor2_ema_without_acceleration"
+    else:
+        if getattr(acceleration_ema, "shape", None) != getattr(previous, "shape", None):
+            raise _UjiCachePredictionFallback("shape_mismatch")
+        curve_term = 0.5 * (dt_pred ** 2) * acceleration_ema.to(previous.device).float()
+        raw_prediction = (
+            linear_prediction
+            + STATE.ujicache_taylor2_curve_strength * curve_term
+        )
+        prediction_note = None
+    return (
+        previous_f32
+        + STATE.ujicache_prediction_strength * (raw_prediction - previous_f32),
+        prediction_note,
+    )
+
+
+def _ujicache_ema_velocity(
+    slot: dict[str, Any],
+    step_index: int,
+    previous: Any,
+) -> tuple[float, Any]:
+    history = slot.get("residual_history") or []
+    if not history:
+        raise _UjiCachePredictionFallback("insufficient_history")
+    latest = history[-1]
+    velocity_ema = slot.get("velocity_ema")
+    if velocity_ema is None:
+        raise _UjiCachePredictionFallback("insufficient_ema_velocity")
+    if getattr(velocity_ema, "shape", None) != getattr(previous, "shape", None):
+        raise _UjiCachePredictionFallback("shape_mismatch")
+    dt_pred = float(step_index) - float(latest["step_index"])
+    return dt_pred, velocity_ema.to(previous.device).float()
+
+
+def _ujicache_ema_info(slot: dict[str, Any], step_index: int) -> dict[str, Any]:
+    history = slot.get("residual_history") or []
+    dt_pred = None
+    if history:
+        try:
+            dt_pred = float(step_index) - float(history[-1]["step_index"])
+        except Exception:
+            dt_pred = None
+    return {
+        "velocity_ready": slot.get("velocity_ema") is not None,
+        "acceleration_ready": slot.get("acceleration_ema") is not None,
+        "dt_pred": dt_pred,
+    }
 
 
 def _ujicache_residual_history(slot: dict[str, Any], count: int) -> list[dict[str, Any]]:
@@ -2191,6 +2348,8 @@ def _dump_ujicache_residual(
                 "cache_device": str(cache_device),
                 "ujicache_model_call": STATE.ujicache_model_calls,
                 "formula": STATE.ujicache_formula,
+                "slope_ema_smoothing": STATE.ujicache_slope_ema_smoothing,
+                "curve_ema_smoothing": STATE.ujicache_curve_ema_smoothing,
             },
         )
 
@@ -2228,6 +2387,8 @@ def _ujicache_log_call(
     skip_streak: int,
     slot_actions: dict[int, str],
     slot_reasons: dict[int, str | None],
+    slot_notes: dict[int, str | None],
+    slot_ema_info: dict[int, dict[str, Any]],
 ) -> None:
     if not STATE.ujicache_verbose_trace and STATE.ujicache_logged_calls >= 12:
         return
@@ -2242,6 +2403,24 @@ def _ujicache_log_call(
     reason_text = ",".join(
         f"{key}:{slot_reasons[key]}" for key in sorted(slot_reasons) if slot_reasons[key]
     ) or (reason or "threshold")
+    note_text = ",".join(
+        f"{key}:{slot_notes[key]}" for key in sorted(slot_notes) if slot_notes[key]
+    ) or "None"
+    velocity_ready_text = ",".join(
+        f"{key}:{bool(slot_ema_info[key].get('velocity_ready'))}"
+        for key in sorted(slot_ema_info)
+    ) or "None"
+    acceleration_ready_text = ",".join(
+        f"{key}:{bool(slot_ema_info[key].get('acceleration_ready'))}"
+        for key in sorted(slot_ema_info)
+    ) or "None"
+    dt_pred_parts = []
+    for key in sorted(slot_ema_info):
+        value = slot_ema_info[key].get("dt_pred")
+        dt_pred_parts.append(
+            f"{key}:None" if value is None else f"{key}:{float(value):.3f}"
+        )
+    dt_pred_text = ",".join(dt_pred_parts) or "None"
     info(
         "ujicache_call="
         f"call={STATE.ujicache_model_calls} step={step_index} "
@@ -2253,6 +2432,12 @@ def _ujicache_log_call(
         f"apply_from_skip={STATE.ujicache_apply_prediction_from_skip} "
         f"prediction_strength={STATE.ujicache_prediction_strength:.2f} "
         f"taylor2_curve_strength={STATE.ujicache_taylor2_curve_strength:.2f} "
+        f"slope_ema_smoothing={STATE.ujicache_slope_ema_smoothing:.2f} "
+        f"curve_ema_smoothing={STATE.ujicache_curve_ema_smoothing:.2f} "
+        f"prediction_note={note_text} "
+        f"ema_velocity_ready={velocity_ready_text} "
+        f"ema_acceleration_ready={acceleration_ready_text} "
+        f"dt_pred={dt_pred_text} "
         f"dry_run={STATE.ujicache_dry_run}"
     )
 

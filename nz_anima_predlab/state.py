@@ -149,10 +149,12 @@ class RuntimeState:
     ujicache_start_percent: float = 0.05
     ujicache_end_percent: float = 0.95
     ujicache_formula: str = UJICACHE_FORMULA_TEACACHE
-    ujicache_use_prediction_after_progress: float = 0.70
+    ujicache_use_prediction_after_progress: float = 0.0
     ujicache_apply_prediction_from_skip: int = 2
     ujicache_prediction_strength: float = 0.50
     ujicache_taylor2_curve_strength: float = 0.25
+    ujicache_slope_ema_smoothing: float = 0.0
+    ujicache_curve_ema_smoothing: float = 0.0
     ujicache_cache_device: str = TEACACHE_CACHE_DEVICE_CUDA
     ujicache_modulated_source: str = TEACACHE_SOURCE_FIRST_BLOCK_SHIFT
     ujicache_coefficient_profile: str = TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT
@@ -337,10 +339,12 @@ class RuntimeState:
         ujicache_start_percent: float = 0.05,
         ujicache_end_percent: float = 0.95,
         ujicache_formula: str = UJICACHE_FORMULA_TEACACHE,
-        ujicache_use_prediction_after_progress: float = 0.70,
+        ujicache_use_prediction_after_progress: float = 0.0,
         ujicache_apply_prediction_from_skip: int = 2,
         ujicache_prediction_strength: float = 0.50,
         ujicache_taylor2_curve_strength: float = 0.25,
+        ujicache_slope_ema_smoothing: float = 0.0,
+        ujicache_curve_ema_smoothing: float = 0.0,
         ujicache_cache_device: str = TEACACHE_CACHE_DEVICE_CUDA,
         ujicache_modulated_source: str = TEACACHE_SOURCE_FIRST_BLOCK_SHIFT,
         ujicache_coefficient_profile: str = TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT,
@@ -449,6 +453,8 @@ class RuntimeState:
         )
         self.ujicache_prediction_strength = _clamp_float(ujicache_prediction_strength, 0.0, 1.0)
         self.ujicache_taylor2_curve_strength = _clamp_float(ujicache_taylor2_curve_strength, 0.0, 1.0)
+        self.ujicache_slope_ema_smoothing = _clamp_float(ujicache_slope_ema_smoothing, 0.0, 0.99)
+        self.ujicache_curve_ema_smoothing = _clamp_float(ujicache_curve_ema_smoothing, 0.0, 0.99)
         self.ujicache_cache_device = (
             ujicache_cache_device if ujicache_cache_device in TEACACHE_CACHE_DEVICES else TEACACHE_CACHE_DEVICE_CUDA
         )

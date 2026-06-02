@@ -54,7 +54,7 @@ UjiCache
    
   Use prediction after progress:   
     slider 0.00 - 1.00  
-    default: 0.70  
+    default: 0.00  
   
   Apply prediction from skip #:  
    slider 1 - 3   
@@ -306,7 +306,7 @@ r_pred = r2 + prediction_strength * (raw_prediction - r2)
 ```text
 Use prediction after progress:
   slider 0.00 - 1.00
-  default: 0.70
+  default: 0.00
 ```
 
 #### 意味
@@ -896,7 +896,7 @@ debug modeまたはverbose modeでは、skip stepごとに以下を出力でき�
 ```text
 UjiCache enabled: true
 UjiCache formula: Linear extrapolation
-UjiCache use_prediction_after_progress: 0.70
+UjiCache use_prediction_after_progress: 0.00
 UjiCache apply_prediction_from_skip: 2
 UjiCache prediction_strength: 0.50
 UjiCache taylor2_curve_strength: 0.25
@@ -920,7 +920,7 @@ Prediction formula:
   TeaCache (residual only)
 
 Use prediction after progress:
-  0.70
+  0.00
 
 Apply prediction from skip #:
   2
