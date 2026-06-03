@@ -386,12 +386,6 @@ class Script(scripts.Script):
                     interactive=False,
                     elem_id="nzap-ujicache-curve-ema-smoothing",
                 )
-                ujicache_cache_device = gr.Radio(
-                    label="Cache device",
-                    choices=TEACACHE_CACHE_DEVICES,
-                    value=TEACACHE_CACHE_DEVICE_CUDA,
-                    elem_id="nzap-ujicache-cache-device",
-                )
                 ujicache_modulated_source = gr.Dropdown(
                     label="Modulated source",
                     choices=TEACACHE_MODULATED_SOURCES,
@@ -420,16 +414,6 @@ class Script(scripts.Script):
                     value=0,
                     elem_id="nzap-ujicache-force-full-interval",
                 )
-                ujicache_dry_run = gr.Checkbox(
-                    label="Dry run",
-                    value=False,
-                    elem_id="nzap-ujicache-dry-run",
-                )
-                ujicache_verbose_trace = gr.Checkbox(
-                    label="Verbose UjiCache trace",
-                    value=False,
-                    elem_id="nzap-ujicache-verbose-trace",
-                )
                 with gr.Accordion(
                     "Auto Uji mode",
                     open=False,
@@ -445,6 +429,22 @@ class Script(scripts.Script):
                         lines=6,
                         elem_id="nzap-auto-uji-csv",
                     )
+                ujicache_cache_device = gr.Radio(
+                    label="Cache device",
+                    choices=TEACACHE_CACHE_DEVICES,
+                    value=TEACACHE_CACHE_DEVICE_CUDA,
+                    elem_id="nzap-ujicache-cache-device",
+                )
+                ujicache_dry_run = gr.Checkbox(
+                    label="Dry run",
+                    value=False,
+                    elem_id="nzap-ujicache-dry-run",
+                )
+                ujicache_verbose_trace = gr.Checkbox(
+                    label="Verbose UjiCache trace",
+                    value=False,
+                    elem_id="nzap-ujicache-verbose-trace",
+                )
                 ujicache_formula.change(
                     fn=_ujicache_prediction_control_updates,
                     inputs=[ujicache_formula, ujicache_slope_ema_smoothing],
