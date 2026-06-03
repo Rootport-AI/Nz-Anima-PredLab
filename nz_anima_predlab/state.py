@@ -162,6 +162,14 @@ class RuntimeState:
     ujicache_force_full_interval: int = 0
     ujicache_dry_run: bool = False
     ujicache_verbose_trace: bool = False
+    auto_ujicache_enabled: bool = False
+    auto_ujicache_csv: str = ""
+    auto_ujicache_active: bool = False
+    auto_ujicache_row_index: int | None = None
+    auto_ujicache_row_name: str | None = None
+    auto_ujicache_row_count: int = 0
+    auto_ujicache_original_n_iter: int = 1
+    auto_ujicache_parse_error: str | None = None
     spectrum_enabled: bool = False
     spectrum_preset: str = SPECTRUM_PRESET_BALANCED
     spectrum_w: float = 0.20
@@ -372,6 +380,8 @@ class RuntimeState:
         dump_spectrum_final_output: bool = False,
         dump_baseline_final_output: bool = False,
         dump_ujicache_residual: bool = False,
+        auto_ujicache_enabled: bool = False,
+        auto_ujicache_csv: str = "",
     ) -> None:
         self.enabled = bool(enabled)
         self.debug_log_enabled = bool(debug_log_enabled)
@@ -472,6 +482,8 @@ class RuntimeState:
         self.ujicache_force_full_interval = _clamp_int(ujicache_force_full_interval, 0, 64)
         self.ujicache_dry_run = bool(ujicache_dry_run)
         self.ujicache_verbose_trace = bool(ujicache_verbose_trace)
+        self.auto_ujicache_enabled = bool(auto_ujicache_enabled) and self.ujicache_enabled
+        self.auto_ujicache_csv = str(auto_ujicache_csv or "")
         if self.ujicache_enabled:
             self.teacache_enabled = False
         self.spectrum_enabled = bool(spectrum_enabled)

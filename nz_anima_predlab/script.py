@@ -3,9 +3,14 @@ from __future__ import annotations
 import gradio as gr
 import modules.scripts as scripts
 
+from .auto_ujicache import (
+    AutoUjiCsvError,
+    apply_auto_ujicache_row_to_state,
+    parse_auto_ujicache_csv,
+)
 from .callbacks import register_callbacks
 from .diagnostics import log_generation_start, log_timing_summary
-from .logging import exception, warning
+from .logging import error, exception, info, warning
 from .model_detect import detect_model
 from .patcher import apply_patch, remove_patch
 from .state import (
@@ -425,6 +430,21 @@ class Script(scripts.Script):
                     value=False,
                     elem_id="nzap-ujicache-verbose-trace",
                 )
+                with gr.Accordion(
+                    "Auto Uji mode",
+                    open=False,
+                    elem_id="nzap-auto-uji-panel",
+                ):
+                    auto_ujicache_enabled = gr.Checkbox(
+                        label="Enable Auto Uji mode",
+                        value=False,
+                        elem_id="nzap-auto-uji-enable",
+                    )
+                    auto_ujicache_csv = gr.Textbox(
+                        label="Auto Uji CSV",
+                        lines=6,
+                        elem_id="nzap-auto-uji-csv",
+                    )
                 ujicache_formula.change(
                     fn=_ujicache_prediction_control_updates,
                     inputs=[ujicache_formula, ujicache_slope_ema_smoothing],
@@ -557,17 +577,32 @@ class Script(scripts.Script):
                 teacache_enabled.change(
                     fn=_teacache_enable_updates,
                     inputs=[teacache_enabled],
-                    outputs=[spectrum_enabled, ujicache_enabled, enabled],
+                    outputs=[
+                        spectrum_enabled,
+                        ujicache_enabled,
+                        enabled,
+                        auto_ujicache_enabled,
+                    ],
                 )
                 spectrum_enabled.change(
                     fn=_spectrum_enable_updates,
                     inputs=[spectrum_enabled],
-                    outputs=[teacache_enabled, ujicache_enabled, enabled],
+                    outputs=[
+                        teacache_enabled,
+                        ujicache_enabled,
+                        enabled,
+                        auto_ujicache_enabled,
+                    ],
                 )
                 ujicache_enabled.change(
                     fn=_ujicache_enable_updates,
                     inputs=[ujicache_enabled],
-                    outputs=[teacache_enabled, spectrum_enabled, enabled],
+                    outputs=[
+                        teacache_enabled,
+                        spectrum_enabled,
+                        enabled,
+                        auto_ujicache_enabled,
+                    ],
                 )
             with gr.Accordion("2D Sparse", open=False, elem_id="nzap-sparse-panel"):
                 sparse_enabled = gr.Checkbox(
@@ -771,7 +806,30 @@ class Script(scripts.Script):
             dump_spectrum_final_output,
             dump_baseline_final_output,
             dump_ujicache_residual,
+            auto_ujicache_enabled,
+            auto_ujicache_csv,
         ]
+
+    def before_process(self, p, *script_args):
+        try:
+            _prepare_auto_ujicache_run(p, script_args)
+        except AutoUjiCsvError as exc:
+            STATE.auto_ujicache_parse_error = str(exc)
+            STATE.set_error(f"auto uji csv error: {exc}")
+            error(f"auto_uji_csv_error {exc}")
+            raise RuntimeError(f"Auto Uji CSV error: {exc}") from exc
+        except Exception as exc:
+            STATE.set_error(f"auto uji setup failed: {exc}")
+            exception("auto uji setup failed")
+            raise
+
+    def process(self, p, *script_args):
+        try:
+            _apply_auto_ujicache_seed_template(p)
+        except Exception as exc:
+            STATE.set_error(f"auto uji seed setup failed: {exc}")
+            exception("auto uji seed setup failed")
+            raise
 
     def process_before_every_sampling(self, p, *script_args, **kwargs):
         try:
@@ -794,9 +852,233 @@ class Script(scripts.Script):
             STATE.tensor_dump_errors += 1
             warning(f"tensor_dump_flush_failed reason={exc}")
             exception("tensor dump flush failed")
+        _finish_auto_ujicache_run(p)
+
+
+_AUTO_UJICACHE_P_ATTRS = (
+    "_nzap_auto_ujicache_rows",
+    "_nzap_auto_ujicache_original_n_iter",
+    "_nzap_auto_ujicache_original_batch_size",
+    "_nzap_auto_ujicache_seed_template_size",
+    "_nzap_auto_ujicache_seed_template_ready",
+    "_nzap_auto_ujicache_logged_row_index",
+    "_nzap_auto_ujicache_iteration_counter",
+)
+
+
+def _prepare_auto_ujicache_run(p, script_args) -> None:
+    _apply_ui_args(script_args)
+    _clear_auto_ujicache_p_attrs(p)
+    STATE.auto_ujicache_active = False
+    STATE.auto_ujicache_row_index = None
+    STATE.auto_ujicache_row_name = None
+    STATE.auto_ujicache_row_count = 0
+    STATE.auto_ujicache_original_n_iter = 1
+    STATE.auto_ujicache_parse_error = None
+
+    if not (STATE.enabled and STATE.ujicache_enabled and STATE.auto_ujicache_enabled):
+        return
+
+    result = parse_auto_ujicache_csv(STATE.auto_ujicache_csv)
+    for message in result.warnings:
+        warning(f"auto_uji_csv_warning {message}")
+
+    rows = result.rows
+    original_n_iter = _positive_int(getattr(p, "n_iter", 1), 1)
+    batch_size = _positive_int(getattr(p, "batch_size", 1), 1)
+    total_n_iter = len(rows) * original_n_iter
+
+    setattr(p, "_nzap_auto_ujicache_rows", rows)
+    setattr(p, "_nzap_auto_ujicache_original_n_iter", original_n_iter)
+    setattr(p, "_nzap_auto_ujicache_original_batch_size", batch_size)
+    setattr(p, "n_iter", total_n_iter)
+
+    STATE.auto_ujicache_active = True
+    STATE.auto_ujicache_row_count = len(rows)
+    STATE.auto_ujicache_original_n_iter = original_n_iter
+
+    info(
+        "auto_uji_prepare "
+        f"rows={len(rows)} original_n_iter={original_n_iter} "
+        f"batch_size={batch_size} total_n_iter={total_n_iter}"
+    )
+
+
+def _apply_auto_ujicache_seed_template(p) -> None:
+    rows = getattr(p, "_nzap_auto_ujicache_rows", None)
+    if not rows:
+        return
+
+    row_count = len(rows)
+    original_n_iter = _positive_int(
+        getattr(p, "_nzap_auto_ujicache_original_n_iter", 1),
+        1,
+    )
+    batch_size = _positive_int(getattr(p, "batch_size", 1), 1)
+    template_size = original_n_iter * batch_size
+    setattr(p, "_nzap_auto_ujicache_seed_template_size", template_size)
+
+    raw_seed_values = getattr(p, "all_seeds", None)
+    if not raw_seed_values and _safe_int(getattr(p, "seed", -1), -1) < 0:
+        return
+
+    was_ready = bool(getattr(p, "_nzap_auto_ujicache_seed_template_ready", False))
+    seed_template = _seed_template(
+        raw_seed_values,
+        getattr(p, "seed", 0),
+        template_size,
+    )
+    setattr(p, "all_seeds", seed_template * row_count)
+
+    if hasattr(p, "all_subseeds"):
+        subseed_template = _seed_template(
+            getattr(p, "all_subseeds", None),
+            getattr(p, "subseed", 0),
+            template_size,
+        )
+        setattr(p, "all_subseeds", subseed_template * row_count)
+
+    setattr(p, "_nzap_auto_ujicache_seed_template_ready", True)
+    if not was_ready:
+        info(
+            "auto_uji_seed_template "
+            f"rows={row_count} template_size={template_size} seeds={_seed_label(seed_template)}"
+        )
+
+
+def _apply_auto_ujicache_row_if_needed(p) -> None:
+    rows = getattr(p, "_nzap_auto_ujicache_rows", None)
+    if not rows or not STATE.auto_ujicache_active or not STATE.ujicache_enabled:
+        return
+
+    original_n_iter = _positive_int(
+        getattr(p, "_nzap_auto_ujicache_original_n_iter", 1),
+        1,
+    )
+    iteration = _current_auto_ujicache_iteration(p)
+    row_index = max(0, min(len(rows) - 1, iteration // original_n_iter))
+    repeat_index = (iteration % original_n_iter) + 1
+    row = rows[row_index]
+
+    apply_auto_ujicache_row_to_state(row)
+    STATE.auto_ujicache_row_index = row.index
+    STATE.auto_ujicache_row_name = row.name
+
+    logged_row_index = getattr(p, "_nzap_auto_ujicache_logged_row_index", None)
+    if logged_row_index != row_index:
+        setattr(p, "_nzap_auto_ujicache_logged_row_index", row_index)
+        info(
+            "auto_uji_row_start "
+            f"index={row_index + 1}/{len(rows)} name={row.name} "
+            f"repeat={repeat_index}/{original_n_iter} "
+            f"threshold={STATE.ujicache_threshold:.4f} "
+            f"formula={STATE.ujicache_formula} "
+            f"prediction_strength={STATE.ujicache_prediction_strength:.2f} "
+            f"batch_size={_positive_int(getattr(p, 'batch_size', 1), 1)} "
+            f"seeds={_row_seed_label(p, row_index)}"
+        )
+
+
+def _finish_auto_ujicache_run(p) -> None:
+    _clear_auto_ujicache_p_attrs(p)
+    STATE.auto_ujicache_active = False
+    STATE.auto_ujicache_row_index = None
+    STATE.auto_ujicache_row_name = None
+    STATE.auto_ujicache_row_count = 0
+    STATE.auto_ujicache_original_n_iter = 1
+
+
+def _clear_auto_ujicache_p_attrs(p) -> None:
+    for attr in _AUTO_UJICACHE_P_ATTRS:
+        try:
+            if hasattr(p, attr):
+                delattr(p, attr)
+        except Exception:
+            setattr(p, attr, None)
+
+
+def _current_auto_ujicache_iteration(p) -> int:
+    value = getattr(p, "iteration", None)
+    if value is not None:
+        try:
+            return max(0, int(value))
+        except Exception:
+            pass
+    counter = _positive_int(getattr(p, "_nzap_auto_ujicache_iteration_counter", 0), 0)
+    setattr(p, "_nzap_auto_ujicache_iteration_counter", counter + 1)
+    return counter
+
+
+def _row_seed_label(p, row_index: int) -> str:
+    template_size = _positive_int(
+        getattr(p, "_nzap_auto_ujicache_seed_template_size", 0),
+        0,
+    )
+    if template_size <= 0:
+        original_n_iter = _positive_int(
+            getattr(p, "_nzap_auto_ujicache_original_n_iter", 1),
+            1,
+        )
+        template_size = original_n_iter * _positive_int(getattr(p, "batch_size", 1), 1)
+    try:
+        seeds = list(getattr(p, "all_seeds", []) or [])
+    except Exception:
+        seeds = []
+    start = row_index * template_size
+    return _seed_label(seeds[start : start + template_size])
+
+
+def _seed_template(values, base_seed, size: int) -> list[int]:
+    try:
+        template = list(values or [])[:size]
+    except Exception:
+        template = []
+    if len(template) >= size:
+        return template
+
+    if template:
+        base = _safe_int(template[0], 0)
+    else:
+        base = _safe_int(base_seed, 0)
+        if base < 0:
+            base = 0
+
+    while len(template) < size:
+        template.append(base + len(template))
+    return template
+
+
+def _seed_label(seeds) -> str:
+    values = list(seeds or [])
+    if not values:
+        return "None"
+    if len(values) == 1:
+        return str(values[0])
+    return f"{values[0]}..{values[-1]}"
+
+
+def _positive_int(value, minimum: int) -> int:
+    try:
+        number = int(value)
+    except Exception:
+        number = minimum
+    return max(minimum, number)
+
+
+def _safe_int(value, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
 
 
 def _apply_ui_args(script_args) -> None:
+    if len(script_args) >= 76:
+        STATE.apply_options(*script_args[:76])
+        return
+    if len(script_args) >= 75:
+        STATE.apply_options(*list(script_args[:75]), "")
+        return
     if len(script_args) >= 74:
         STATE.apply_options(*script_args[:74])
         return
@@ -866,6 +1148,8 @@ def _insert_default_ujicache_ema_args(script_args):
 
 def _begin_generation(p, script_args, source: str) -> None:
     _apply_ui_args(script_args)
+    _apply_auto_ujicache_seed_template(p)
+    _apply_auto_ujicache_row_if_needed(p)
     if not STATE.active():
         _remove_generation_patches()
         return
@@ -1182,20 +1466,20 @@ def _ujicache_prediction_control_updates(formula: str, slope_ema_smoothing: floa
 
 def _teacache_enable_updates(child_enabled: bool):
     if child_enabled:
-        return False, False, True
-    return gr.update(), gr.update(), gr.update()
+        return False, False, True, False
+    return gr.update(), gr.update(), gr.update(), gr.update()
 
 
 def _spectrum_enable_updates(child_enabled: bool):
     if child_enabled:
-        return False, False, True
-    return gr.update(), gr.update(), gr.update()
+        return False, False, True, False
+    return gr.update(), gr.update(), gr.update(), gr.update()
 
 
 def _ujicache_enable_updates(child_enabled: bool):
     if child_enabled:
-        return False, False, True
-    return gr.update(), gr.update(), gr.update()
+        return False, False, True, gr.update()
+    return gr.update(), gr.update(), gr.update(), False
 
 
 def _enable_parent_if_child_enabled(child_enabled: bool):
