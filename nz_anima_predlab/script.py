@@ -326,6 +326,34 @@ class Script(scripts.Script):
                     value=0.95,
                     elem_id="nzap-ujicache-end-percent",
                 )
+                ujicache_modulated_source = gr.Dropdown(
+                    label="Modulated source",
+                    choices=TEACACHE_MODULATED_SOURCES,
+                    value=TEACACHE_SOURCE_FIRST_BLOCK_SHIFT,
+                    elem_id="nzap-ujicache-modulated-source",
+                )
+                ujicache_coefficient_profile = gr.Dropdown(
+                    label="Coefficient profile",
+                    choices=TEACACHE_COEFFICIENT_PROFILES,
+                    value=TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT,
+                    elem_id="nzap-ujicache-coefficient-profile",
+                )
+                ujicache_max_skip_streak = gr.Slider(
+                    label="Max skip streak (0 = off)",
+                    minimum=0,
+                    maximum=64,
+                    step=1,
+                    value=0,
+                    elem_id="nzap-ujicache-max-skip-streak",
+                )
+                ujicache_force_full_interval = gr.Slider(
+                    label="Force full interval (0 = off)",
+                    minimum=0,
+                    maximum=64,
+                    step=1,
+                    value=0,
+                    elem_id="nzap-ujicache-force-full-interval",
+                )
                 ujicache_formula = gr.Dropdown(
                     label="Prediction formula",
                     choices=UJICACHE_FORMULAS,
@@ -385,34 +413,6 @@ class Script(scripts.Script):
                     value=0.0,
                     interactive=False,
                     elem_id="nzap-ujicache-curve-ema-smoothing",
-                )
-                ujicache_modulated_source = gr.Dropdown(
-                    label="Modulated source",
-                    choices=TEACACHE_MODULATED_SOURCES,
-                    value=TEACACHE_SOURCE_FIRST_BLOCK_SHIFT,
-                    elem_id="nzap-ujicache-modulated-source",
-                )
-                ujicache_coefficient_profile = gr.Dropdown(
-                    label="Coefficient profile",
-                    choices=TEACACHE_COEFFICIENT_PROFILES,
-                    value=TEACACHE_PROFILE_ANIMA_2B_30STEP_FIRST_BLOCK_SHIFT,
-                    elem_id="nzap-ujicache-coefficient-profile",
-                )
-                ujicache_max_skip_streak = gr.Slider(
-                    label="Max skip streak (0 = off)",
-                    minimum=0,
-                    maximum=64,
-                    step=1,
-                    value=0,
-                    elem_id="nzap-ujicache-max-skip-streak",
-                )
-                ujicache_force_full_interval = gr.Slider(
-                    label="Force full interval (0 = off)",
-                    minimum=0,
-                    maximum=64,
-                    step=1,
-                    value=0,
-                    elem_id="nzap-ujicache-force-full-interval",
                 )
                 with gr.Accordion(
                     "Auto Uji mode",
@@ -1195,20 +1195,53 @@ def _apply_infotext_metadata(p) -> None:
         if not isinstance(params, dict):
             params = {}
             setattr(p, "extra_generation_params", params)
-        params["UjiCache enabled"] = True
-        params["UjiCache formula"] = STATE.ujicache_formula
-        params["UjiCache use_prediction_after_progress"] = (
+        _clear_legacy_ujicache_metadata(params)
+        params["Uji enabled"] = True
+        params["Uji formula"] = STATE.ujicache_formula
+        params["Uji threshold"] = f"{STATE.ujicache_threshold:.4f}"
+        params["Uji progress"] = (
+            f"{STATE.ujicache_start_percent:.2f}..{STATE.ujicache_end_percent:.2f}"
+        )
+        params["Uji use_prediction_after_progress"] = (
             f"{STATE.ujicache_use_prediction_after_progress:.2f}"
         )
-        params["UjiCache apply_prediction_from_skip"] = STATE.ujicache_apply_prediction_from_skip
-        params["UjiCache prediction_strength"] = f"{STATE.ujicache_prediction_strength:.2f}"
-        params["UjiCache taylor2_curve_strength"] = (
+        params["Uji apply_prediction_from_skip"] = STATE.ujicache_apply_prediction_from_skip
+        params["Uji prediction_strength"] = f"{STATE.ujicache_prediction_strength:.2f}"
+        params["Uji taylor2_curve_strength"] = (
             f"{STATE.ujicache_taylor2_curve_strength:.2f}"
         )
-        params["UjiCache slope_ema_smoothing"] = f"{STATE.ujicache_slope_ema_smoothing:.2f}"
-        params["UjiCache curve_ema_smoothing"] = f"{STATE.ujicache_curve_ema_smoothing:.2f}"
+        params["Uji slope_ema_smoothing"] = f"{STATE.ujicache_slope_ema_smoothing:.2f}"
+        params["Uji curve_ema_smoothing"] = f"{STATE.ujicache_curve_ema_smoothing:.2f}"
+        params["Uji modulated_source"] = STATE.ujicache_modulated_source
+        params["Uji coefficient_profile"] = STATE.ujicache_coefficient_profile
+        params["Uji max_skip_streak"] = STATE.ujicache_max_skip_streak
+        params["Uji force_full_interval"] = STATE.ujicache_force_full_interval
+        if STATE.auto_ujicache_active and STATE.auto_ujicache_row_index is not None:
+            if STATE.auto_ujicache_row_count > 0:
+                params["Uji auto_row_index"] = (
+                    f"{STATE.auto_ujicache_row_index}/{STATE.auto_ujicache_row_count}"
+                )
+            else:
+                params["Uji auto_row_index"] = STATE.auto_ujicache_row_index
+            params["Uji auto_row_name"] = STATE.auto_ujicache_row_name or ""
     except Exception as exc:
         warning(f"ujicache_metadata_failed reason={exc}")
+
+
+def _clear_legacy_ujicache_metadata(params: dict) -> None:
+    for key in (
+        "UjiCache enabled",
+        "UjiCache formula",
+        "UjiCache use_prediction_after_progress",
+        "UjiCache apply_prediction_from_skip",
+        "UjiCache prediction_strength",
+        "UjiCache taylor2_curve_strength",
+        "UjiCache slope_ema_smoothing",
+        "UjiCache curve_ema_smoothing",
+        "Uji auto_row_index",
+        "Uji auto_row_name",
+    ):
+        params.pop(key, None)
 
 
 def _configure_generation_patches() -> None:
