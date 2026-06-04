@@ -241,6 +241,7 @@ class RuntimeState:
     ujicache_model_calls: int = 0
     ujicache_full_calcs: int = 0
     ujicache_skips: int = 0
+    ujicache_skipped_steps: list[int] = field(default_factory=list)
     ujicache_prediction_used: int = 0
     ujicache_fallback_used: int = 0
     ujicache_dry_run_predictions: int = 0
@@ -671,6 +672,7 @@ class RuntimeState:
         self.ujicache_model_calls = 0
         self.ujicache_full_calcs = 0
         self.ujicache_skips = 0
+        self.ujicache_skipped_steps.clear()
         self.ujicache_prediction_used = 0
         self.ujicache_fallback_used = 0
         self.ujicache_dry_run_predictions = 0

@@ -366,6 +366,7 @@ def log_timing_summary() -> None:
             f"fallback_used={STATE.ujicache_fallback_used} "
             f"dry_run_predictions={STATE.ujicache_dry_run_predictions} "
             f"skip_rate={skip_rate:.3f} "
+            f"skipped_steps={_fmt_step_ranges(STATE.ujicache_skipped_steps)} "
             f"first_full_calcs={STATE.ujicache_first_full_calcs} "
             f"forced_full_calcs={STATE.ujicache_forced_full_calcs} "
             f"fallbacks={STATE.ujicache_fallbacks} "
@@ -422,6 +423,30 @@ def _fmt_counts(value: dict[str, int]) -> str:
     if not value:
         return "None"
     return ",".join(f"{key}:{value[key]}" for key in sorted(value))
+
+
+def _fmt_step_ranges(steps: list[int]) -> str:
+    if not steps:
+        return "None"
+    values = sorted(set(int(step) for step in steps))
+    ranges: list[str] = []
+    start = values[0]
+    end = values[0]
+    for step in values[1:]:
+        if step == end + 1:
+            end = step
+            continue
+        ranges.append(_fmt_step_range(start, end))
+        start = step
+        end = step
+    ranges.append(_fmt_step_range(start, end))
+    return ",".join(ranges)
+
+
+def _fmt_step_range(start: int, end: int) -> str:
+    if start == end:
+        return str(start)
+    return f"{start}-{end}"
 
 
 def _current_sd_model() -> Any:

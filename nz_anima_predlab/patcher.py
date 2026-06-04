@@ -1596,6 +1596,8 @@ def _ujicache_forward_body(
         )
         cache["skip_streak"] = skip_streak
         STATE.ujicache_skips += 1
+        if not STATE.ujicache_skipped_steps or STATE.ujicache_skipped_steps[-1] != step_index:
+            STATE.ujicache_skipped_steps.append(int(step_index))
         if any(action == "prediction" for action in slot_actions.values()):
             STATE.ujicache_prediction_used += 1
             decision = "prediction"
