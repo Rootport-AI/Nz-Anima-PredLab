@@ -290,7 +290,7 @@ class Script(scripts.Script):
                         inputs=[],
                         outputs=[teacache_preset],
                     )
-            with gr.Accordion("UjiCache", open=False, elem_id="nzap-ujicache-panel"):
+            with gr.Accordion("UjiCache -Prototype", open=False, elem_id="nzap-ujicache-panel"):
                 ujicache_enabled = gr.Checkbox(
                     label="Enable UjiCache experiment",
                     value=False,
